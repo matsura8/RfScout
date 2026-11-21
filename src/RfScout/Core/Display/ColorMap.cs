@@ -193,15 +193,17 @@ public sealed class DbRange
     /// <returns>false when there was too little to judge, leaving the previous range in force.</returns>
     public bool AutoRange(ReadOnlySpan<float> powerDb, int filledBins)
     {
-        int count = Math.Min(filledBins, powerDb.Length);
-        if (count == 0)
+        // filledBins counts populated bins anywhere in the grid (SpectrumAssembler.Publish); it is
+        // not the length of a filled prefix, so it only decides the early exit and every bin is
+        // scanned.
+        if (filledBins <= 0 || powerDb.IsEmpty)
         {
             return false;
         }
 
-        float[] copy = new float[count];
+        float[] copy = new float[powerDb.Length];
         int used = 0;
-        for (int i = 0; i < count; i++)
+        for (int i = 0; i < powerDb.Length; i++)
         {
             float value = powerDb[i];
             if (value != SpectrumFrame.EmptyBin && !float.IsNaN(value))

@@ -157,6 +157,23 @@ public sealed class DisplayLayerTests
     }
 
     [Fact]
+    public void AutoRangeScansTheWholeGridNotAFilledPrefix()
+    {
+        // FilledBins counts populated bins anywhere in the frame. Here only the last 20 of 100
+        // bins hold data, so treating the count as a prefix length would see nothing at all.
+        float[] bins = new float[100];
+        Array.Fill(bins, SpectrumFrame.EmptyBin);
+        for (int i = 80; i < 100; i++)
+        {
+            bins[i] = -90f + (i - 80);
+        }
+
+        var range = new DbRange(-140, -20);
+        Assert.True(range.AutoRange(bins, filledBins: 20));
+        Assert.True(range.MinDb is > -100 and < -85, $"floor at {range.MinDb:F1} dBFS");
+    }
+
+    [Fact]
     public void AutoRangeNeverProducesAnUnreadablyNarrowOrWideSpan()
     {
         // A dead-flat floor would otherwise collapse the ramp onto a couple of dB and turn the

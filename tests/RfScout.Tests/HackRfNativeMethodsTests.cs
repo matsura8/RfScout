@@ -27,6 +27,23 @@ public sealed class HackRfNativeMethodsTests
             .ToList();
 
     /// <summary>
+    /// libhackrf returns its version, release, board and error names from static storage. A
+    /// <c>[LibraryImport]</c> that returns <c>string</c> makes the generated marshaller free that
+    /// pointer with <c>Marshal.FreeCoTaskMem</c>, which corrupts the heap the first time a device
+    /// opens. Every import must return a pointer and copy the text without freeing it.
+    /// </summary>
+    [Fact]
+    public void NoImportReturnsAMarshalledString()
+    {
+        var offenders = DeclaredMethods()
+            .Where(m => m.GetCustomAttribute<LibraryImportAttribute>() is not null && m.ReturnType == typeof(string))
+            .Select(m => m.Name)
+            .ToList();
+
+        Assert.True(offenders.Count == 0, $"these imports return string and would free library-owned memory: {string.Join(", ", offenders)}");
+    }
+
+    /// <summary>
     /// Rule 1 of the brief: RfScout never transmits. Rather than trusting review, this fails if
     /// the wrapper names any TX entry point at all - the exact functions the brief forbids, plus
     /// anything else whose name mentions TX, which is what a future edit would add.
@@ -101,6 +118,8 @@ public sealed class HackRfNativeMethodsTests
             "hackrf_version_string_read",
             "ThrowForError",
             "ReadDeviceList",
+            "LibraryOwnedString",
+            "ErrorName",
         ];
 
         var actual = DeclaredMethods()
