@@ -38,4 +38,15 @@
     <None Include="fixtures\**\*" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!--
+      The app is OutputType=WinExe and so carries the Windows Desktop framework reference. The
+      test project needs the same one: without it the test host resolves WPF from its own TPA
+      list, PresentationCore loads twice, and the first WPF type load fails with
+      "DefaultDispatcher was defaulted twice" (dotnet/wpf#5359). Tests that never touch the UI
+      pay for it in module load time only.
+    -->
+    <FrameworkReference Include="Microsoft.WindowsDesktop.App.WPF" />
+  </ItemGroup>
+
 </Project>

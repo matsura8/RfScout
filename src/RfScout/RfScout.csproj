@@ -6,6 +6,12 @@
     <Platforms>x64</Platforms>
     <PlatformTarget>x64</PlatformTarget>
     <UseWPF>true</UseWPF>
+    <!--
+      Needed by the libhackrf binding: an unmanaged function pointer for the RX callback, plus
+      pointer reads of the transfer struct and the device list. Everything unsafe stays inside
+      Services\HackRf.
+    -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <RootNamespace>RfScout</RootNamespace>
     <AssemblyName>RfScout</AssemblyName>
