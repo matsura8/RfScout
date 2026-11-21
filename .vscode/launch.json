@@ -1,0 +1,15 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": ".NET: Launch app",
+      "type": "coreclr",
+      "request": "launch",
+      "program": "${workspaceFolder}/out/artifacts/bin/RfScout/debug/RfScout.exe",
+      "cwd": "${workspaceFolder}",
+      "preLaunchTask": "dev build",
+      "justMyCode": true
+    },
+    { "name": ".NET: Attach", "type": "coreclr", "request": "attach" }
+  ]
+}

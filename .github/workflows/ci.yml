@@ -1,0 +1,83 @@
+# CI: the same gates as `dev ci` (format, lint, tests, quick audit) plus a beta package artifact.
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      CI: "true"
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # gitleaks scans history
+
+      - name: .NET 10
+        if: hashFiles('**/*.csproj') != ''
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Rust
+        if: hashFiles('Cargo.toml') != ''
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Rust tools
+        if: hashFiles('Cargo.toml') != ''
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit,cargo-deny,cargo-nextest
+
+      - name: Security tools
+        shell: pwsh
+        run: |
+          choco install gitleaks cppcheck -y --no-progress
+          pip install --quiet semgrep
+          $nupkg = "$env:RUNNER_TEMP\binskim.zip"
+          Invoke-WebRequest https://www.nuget.org/api/v2/package/Microsoft.CodeAnalysis.BinSkim -OutFile $nupkg
+          Expand-Archive $nupkg "$env:LOCALAPPDATA\devflow\tools\binskim" -Force
+          "C:\Program Files\Cppcheck" | Out-File -Append $env:GITHUB_PATH
+          # Quick audit skips trivy; syft (SBOM) is skipped in CI unless you add it.
+
+      - name: Lint, test, audit
+        shell: pwsh
+        run: ./dev.ps1 ci
+
+      - name: Package
+        shell: pwsh
+        run: ./dev.ps1 package
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: build-${{ github.sha }}
+          path: |
+            out/package/*
+            out/audit/**/summary.md
+            out/audit/**/*.sarif
+          if-no-files-found: ignore
+
+  # Real-device tests. Runs only on a self-hosted runner with the hardware attached
+  # (e.g. Apache, labels: self-hosted, windows, usb) and only when the repo variable
+  # DEVFLOW_HARDWARE_RUNNER is "true". Setup: docs\USB.md in DevFlow.
+  hardware:
+    needs: build
+    if: vars.DEVFLOW_HARDWARE_RUNNER == 'true'
+    runs-on: [self-hosted, windows, usb]
+    steps:
+      - uses: actions/checkout@v4
+      - name: USB check + hardware tests
+        shell: pwsh
+        run: |
+          ./dev.ps1 usb -Check
+          ./dev.ps1 test -Hardware

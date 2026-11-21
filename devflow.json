@@ -1,0 +1,14 @@
+{
+  "name": "RfScout",
+  "type": "csharp",
+  "binary": "RfScout",
+  "repo": "",
+  "usb": [
+    {
+      "name": "hackrf",
+      "vid": "1d50",
+      "pid": "6089",
+      "driver": "WINUSB"
+    }
+  ]
+}

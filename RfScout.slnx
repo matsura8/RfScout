@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/RfScout/RfScout.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/RfScout.Tests/RfScout.Tests.csproj" />
+  </Folder>
+</Solution>

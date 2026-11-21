@@ -1,0 +1,27 @@
+name: Beta feedback
+description: Report a problem or suggestion from a beta build
+labels: [beta]
+body:
+  - type: input
+    id: version
+    attributes: { label: Build version, description: "Window title / About, or the zip name (e.g. 0.2.0-beta.3)" }
+    validations: { required: true }
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind
+      options: [Crash, Wrong behaviour, UI / layout, Accessibility, Performance, Install / startup, Suggestion]
+    validations: { required: true }
+  - type: textarea
+    id: steps
+    attributes: { label: Steps to reproduce, placeholder: "1. ...\n2. ...\n3. ..." }
+    validations: { required: true }
+  - type: textarea
+    id: expected
+    attributes: { label: Expected vs actual }
+  - type: input
+    id: env
+    attributes: { label: Environment, description: "Windows version, display scaling (100/150/200%), theme (light/dark/high contrast), sandbox or real PC" }
+  - type: textarea
+    id: attachments
+    attributes: { label: Screenshots / dumps / logs, description: "Crash dumps are in C:\\results\\dumps (sandbox) or the folder `dev dumps -Enable` set." }

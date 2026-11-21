@@ -1,0 +1,25 @@
+# DevFlow outputs
+/out/
+# Rust
+/target/
+# .NET
+bin/
+obj/
+*.user
+# IDEs
+.vs/
+.idea/
+*.suo
+# Crash dumps / secrets never belong in git
+*.dmp
+*.pfx
+*.p12
+*.snk
+.env
+
+# native: cloned hackrf source + vcpkg tree, rebuilt by native\build-libhackrf.ps1
+# (the built DLLs in native\x64 are committed on purpose)
+/native/src/
+
+# agent/editor backups
+*.strata-backup-*
