@@ -6,7 +6,7 @@ namespace RfScout.Tests;
 /// (the loser sees HACKRF_ERROR_NOT_FOUND).
 /// </summary>
 [CollectionDefinition(Name, DisableParallelization = true)]
-public sealed class HardwareCollection
+public sealed class HackRfHardwareGroup
 {
     public const string Name = "HackRF hardware";
 }
