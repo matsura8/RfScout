@@ -157,7 +157,42 @@ public sealed record RadioStats(
     long BlocksReceived,
     long DroppedBlocks,
     double SweepsPerSecond,
-    double SamplesPerSecond)
+    double SamplesPerSecond,
+    long DroppedBytes = 0)
 {
     public static RadioStats Empty { get; } = new(0, 0, 0, 0);
+
+    /// <summary>True when the stream lost data, which is what the status bar flags in amber.</summary>
+    public bool IsLosingData => DroppedBlocks > 0 || DroppedBytes > 0;
+}
+
+/// <summary>
+/// What the radio reported about itself, read once when it is opened and shown in the status bar
+/// and the About box. <paramref name="UsbApiVersion"/> is the raw firmware API number (0x0108 is
+/// 1.08); sweep mode needs 0x0102 or newer.
+/// </summary>
+public sealed record RadioDeviceInfo(
+    string SerialNumber,
+    string BoardName,
+    string FirmwareVersion,
+    int UsbApiVersion,
+    string LibraryVersion)
+{
+    /// <summary>Firmware API as text, the way hackrf_info prints it.</summary>
+    public string UsbApiVersionText => $"1.{UsbApiVersion & 0xFF:D2}";
+
+    /// <summary>Minimum firmware API that supports RX sweep mode.</summary>
+    public const int MinSweepApiVersion = 0x0102;
+
+    public bool SupportsSweep => UsbApiVersion >= MinSweepApiVersion;
+
+    /// <summary>Serial shortened for the status bar: 0000...711B keeps the ends that differ.</summary>
+    public string ShortSerial
+    {
+        get
+        {
+            string trimmed = SerialNumber.Trim();
+            return trimmed.Length <= 12 ? trimmed : string.Concat(trimmed.AsSpan(0, 4), "...", trimmed.AsSpan(trimmed.Length - 4));
+        }
+    }
 }

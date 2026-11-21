@@ -5,15 +5,15 @@ namespace RfScout.Core.Fakes;
 
 /// <summary>
 /// Deterministic sweep data for unit tests and <c>--self-test</c>: no HackRF, no threads, no
-/// timing. The block helpers are shared by the tests so that no test re-implements the sweep
-/// framing in its own body.
+/// timing, no dependency on what happens to be on the air. The block helpers are shared by the
+/// tests so that no test re-implements sweep framing in its own body.
 /// </summary>
 public static class SyntheticSignal
 {
     /// <summary>
-    /// Complex tone as interleaved s8 I/Q: I = a*cos(2*pi*f*i), Q = a*sin(2*pi*f*i), with
-    /// <paramref name="cyclesPerSample"/> the tone frequency in cycles per sample (a positive
-    /// value is above the tuned centre).
+    /// Complex tone as interleaved s8 I/Q: I = a*cos(2*pi*f*i), Q = a*sin(2*pi*f*i).
+    /// <paramref name="cyclesPerSample"/> is the tone frequency in cycles per sample relative to
+    /// the tuned centre, so a negative value is below it.
     /// </summary>
     public static byte[] IqBytes(int sampleCount, double cyclesPerSample, double amplitude = 1.0)
     {
@@ -52,7 +52,7 @@ public static class SyntheticSignal
         return block;
     }
 
-    /// <summary>The same block as a <see cref="SweepBlock"/>, IQ copied out of the header-prefixed buffer.</summary>
+    /// <summary>The same block as a <see cref="SweepBlock"/>, IQ copied out of the header.</summary>
     public static SweepBlock SweepBlock(long headerFrequencyHz, int sampleCount, double cyclesPerSample, double amplitude = 1.0)
     {
         byte[] block = SweepBlockBytes(headerFrequencyHz, sampleCount, cyclesPerSample, amplitude);
@@ -60,12 +60,13 @@ public static class SyntheticSignal
     }
 
     /// <summary>
-    /// A tone at <paramref name="rfFrequencyHz"/> inside the block a radio would produce when it
-    /// tunes to <paramref name="headerHz"/> + 7.5 MHz, i.e. already expressed in cycles per
+    /// A block carrying a tone at <paramref name="rfFrequencyHz"/> as the radio would produce it
+    /// when tuned to <paramref name="headerHz"/> + 7.5 MHz, i.e. already expressed in cycles per
     /// sample relative to that tuned centre.
     /// </summary>
     public static SweepBlock BlockWithTone(long headerHz, int fftLength, double rfFrequencyHz, double amplitude = 1.0)
     {
+        _ = fftLength; // the FFT length the caller will decode with; the tone is rate-relative
         double tunedCenterHz = headerHz + SweepMath.SweepOffsetHz;
         double cyclesPerSample = (rfFrequencyHz - tunedCenterHz) / SweepMath.SampleRateHz;
         return SweepBlock(headerHz, SweepMath.SamplesPerBlock, cyclesPerSample, amplitude);
@@ -79,9 +80,9 @@ public static class SyntheticSignal
 }
 
 /// <summary>
-/// An <see cref="IRadioSource"/> that replays synthetic blocks instead of talking to a HackRF,
-/// so the whole sweep pipeline (framing, FFT, grid, peak finding, decoders) can be tested and
-/// demoed with no hardware attached.
+/// An <see cref="IRadioSource"/> that replays synthetic blocks instead of talking to a HackRF, so
+/// the whole sweep pipeline - framing, FFT, grid, peak finding, decoders - can be tested and
+/// demoed with no radio attached. It also serves as the no-hardware demo mode in the app.
 /// </summary>
 public sealed class SyntheticRadioSource : IRadioSource
 {
@@ -92,15 +93,31 @@ public sealed class SyntheticRadioSource : IRadioSource
     /// </summary>
     public const long DefaultStepHz = SweepMath.SampleRateHz * 3 / 4;
 
+    /// <summary>Identity a fake source reports, so the status bar and About box have something
+    /// honest to show when no radio is present.</summary>
+    public static RadioDeviceInfo FakeDeviceInfo { get; } = new(
+        SerialNumber: "SYNTH000000000000000000000",
+        BoardName: "Synthetic source (no radio)",
+        FirmwareVersion: "n/a",
+        UsbApiVersion: 0x0108,
+        LibraryVersion: "none");
+
     private readonly long _startHz;
     private readonly long _stopHz;
     private readonly Func<long, int, double, SweepBlock> _blockFactory;
+    private readonly Lock _gate = new();
     private long _blocksReceived;
+    private int _lnaDb = RadioGains.DefaultLnaDb;
+    private int _vgaDb = RadioGains.DefaultVgaDb;
+    private bool _ampOn;
+    private bool _antennaPower;
+    private bool _running;
+    private IqCapture? _lastCapture;
 
     /// <summary>
     /// Replay a sweep of <paramref name="startHz"/>..<paramref name="stopHz"/>.
     /// <paramref name="blockFactory"/> builds the block for one header frequency, FFT length and
-    /// tone offset, which lets a test plant a tone at a chosen RF.
+    /// tone frequency, which lets a test plant a tone wherever it likes.
     /// </summary>
     public SyntheticRadioSource(
         long startHz,
@@ -123,34 +140,74 @@ public sealed class SyntheticRadioSource : IRadioSource
 
     public event EventHandler<RadioStoppedEventArgs>? Stopped;
 
-    public bool IsRunning { get; private set; }
+    public RadioDeviceInfo? DeviceInfo => FakeDeviceInfo;
+
+    public bool IsRunning
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _running;
+            }
+        }
+    }
 
     /// <summary>Blocks handed to the assembler so far.</summary>
     public long BlocksReplayed => Interlocked.Read(ref _blocksReceived);
 
-    public SweepPlan? Plan { get; private set; }
+    /// <summary>The capture raised by the last <see cref="StartCapture"/>, or null.</summary>
+    public IqCapture? LastCapture
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _lastCapture;
+            }
+        }
+    }
+
+    public SweepPlan? Plan
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _plan;
+            }
+        }
+    }
+
+    private SweepPlan? _plan;
 
     public RadioStats ReadStats() =>
-        new(Interlocked.Read(ref _blocksReceived), 0, 0, SweepMath.SampleRateHz);
+        new(
+            BlocksReceived: Interlocked.Read(ref _blocksReceived),
+            DroppedBlocks: 0,
+            SweepsPerSecond: 1,
+            SamplesPerSecond: SweepMath.SampleRateHz);
 
     public void StartSweep(SweepPlan plan)
     {
         ArgumentNullException.ThrowIfNull(plan);
-        if (IsRunning)
-        {
-            throw new InvalidOperationException("A sweep or capture is already running.");
-        }
 
+        // Validate before claiming the source, so a rejected plan leaves it idle and startable.
+        // The real device does the same, and the UI relies on it: a plan with no ranges would
+        // otherwise look "running" with nothing to show.
         if (!plan.IsValid)
         {
             throw new ArgumentException("Sweep plan is not valid.", nameof(plan));
         }
 
-        Plan = plan;
-        IsRunning = true;
-
+        Enter();
         try
         {
+            lock (_gate)
+            {
+                _plan = plan;
+            }
+
             int fft = plan.FftLength;
             SpectrumFrame frame = ReplayOnce(plan, fft, DefaultStepHz);
 
@@ -160,13 +217,13 @@ public sealed class SyntheticRadioSource : IRadioSource
         }
         finally
         {
-            IsRunning = false;
+            Exit();
         }
     }
 
     /// <summary>
-    /// Walk the span once and return the assembled frame. Exposed so tests can drive a single
-    /// pass without an event subscription.
+    /// Walk the span once and return the assembled frame, so a test can drive a single pass
+    /// without subscribing to events.
     /// </summary>
     public SpectrumFrame ReplayOnce(SweepPlan plan, int fftLength, long stepHz)
     {
@@ -194,43 +251,111 @@ public sealed class SyntheticRadioSource : IRadioSource
 
     public void StartCapture(long centerHz, int sampleRateHz, TimeSpan duration)
     {
-        if (IsRunning)
-        {
-            throw new InvalidOperationException("A sweep or capture is already running.");
-        }
-
-        if (sampleRateHz <= 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(sampleRateHz), sampleRateHz, "Sample rate must be positive.");
-        }
-
-        IsRunning = true;
+        Enter();
         try
         {
+            if (sampleRateHz <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(sampleRateHz), sampleRateHz, "Sample rate must be positive.");
+            }
+
             int samples = (int)Math.Clamp(duration.TotalSeconds * sampleRateHz, 1, 1 << 24);
             byte[] iq = SyntheticSignal.IqBytes(samples, cyclesPerSample: 0.05);
-            var capture = new IqCapture(
-                centerHz,
-                sampleRateHz,
-                LnaGainDb: 0,
-                VgaGainDb: 0,
-                RfAmpEnabled: false,
-                AntennaPower: false,
-                DateTimeOffset.UtcNow,
-                iq);
+            IqCapture capture;
+            lock (_gate)
+            {
+                capture = new IqCapture(
+                    centerHz,
+                    sampleRateHz,
+                    _lnaDb,
+                    _vgaDb,
+                    _ampOn,
+                    _antennaPower,
+                    DateTimeOffset.UtcNow,
+                    iq);
+                _lastCapture = capture;
+            }
 
-            // Raised while still running, exactly as <see cref="StartSweep"/> does.
+            // Raised while still running, exactly as the real device does.
             CaptureAvailable?.Invoke(this, new IqCaptureEventArgs(capture));
         }
         finally
         {
-            IsRunning = false;
+            Exit();
         }
     }
 
-    /// <summary>Raise <see cref="Stopped"/> the way a real source would when the device is pulled.</summary>
+    public void SetGains(int lnaGainDb, int vgaGainDb)
+    {
+        if (!RadioGains.IsValidLna(lnaGainDb))
+        {
+            throw new ArgumentOutOfRangeException(nameof(lnaGainDb), lnaGainDb, "LNA must be 0-40 dB in 8 dB steps.");
+        }
+
+        if (!RadioGains.IsValidVga(vgaGainDb))
+        {
+            throw new ArgumentOutOfRangeException(nameof(vgaGainDb), vgaGainDb, "VGA must be 0-62 dB in 2 dB steps.");
+        }
+
+        lock (_gate)
+        {
+            _lnaDb = lnaGainDb;
+            _vgaDb = vgaGainDb;
+        }
+    }
+
+    public void SetRfAmplifier(bool enabled)
+    {
+        lock (_gate)
+        {
+            _ampOn = enabled;
+        }
+    }
+
+    public void SetAntennaPower(bool enabled)
+    {
+        lock (_gate)
+        {
+            _antennaPower = enabled;
+        }
+    }
+
+    /// <summary>Gains the fake is currently set to, for tests that assert the UI pushed them down.</summary>
+    public (int LnaDb, int VgaDb, bool AmpOn, bool AntennaPower) Gains
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return (_lnaDb, _vgaDb, _ampOn, _antennaPower);
+            }
+        }
+    }
+
+    /// <summary>Raise <see cref="Stopped"/> the way a real source does when the device is pulled.</summary>
     public void SimulateDeviceLost() =>
         Stopped?.Invoke(this, new RadioStoppedEventArgs("Synthetic source stopped.", deviceLost: true));
 
-    public void Dispose() => IsRunning = false;
+    public void Dispose() => Exit();
+
+    private void Enter()
+    {
+        lock (_gate)
+        {
+            if (_running)
+            {
+                throw new InvalidOperationException("A sweep or capture is already running.");
+            }
+
+            _running = true;
+        }
+    }
+
+    private void Exit()
+    {
+        lock (_gate)
+        {
+            _running = false;
+        }
+    }
 }

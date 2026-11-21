@@ -2,7 +2,7 @@ namespace RfScout.Core;
 
 /// <summary>
 /// Everything a signal source must provide, so that the DSP, peak finder and decoders can be
-/// unit tested against <see cref="Fakes.SyntheticRadioSource"/> (and, later, a recorded-file
+/// unit tested against <see cref="Fakes.SyntheticRadioSource"/> (and, from M3, a recorded-file
 /// source) instead of a real HackRF.
 ///
 /// Two modes only, never at the same time:
@@ -28,6 +28,9 @@ public interface IRadioSource : IDisposable
 
     bool IsRunning { get; }
 
+    /// <summary>What the device reported about itself, or null before one is opened.</summary>
+    RadioDeviceInfo? DeviceInfo { get; }
+
     /// <summary>Start a sweep. Throws <see cref="InvalidOperationException"/> if something is already running.</summary>
     void StartSweep(SweepPlan plan);
 
@@ -36,6 +39,19 @@ public interface IRadioSource : IDisposable
     /// Throws <see cref="InvalidOperationException"/> if a sweep or capture is already running.
     /// </summary>
     void StartCapture(long centerHz, int sampleRateHz, TimeSpan duration);
+
+    /// <summary>
+    /// Change LNA and baseband VGA gains. Both are live controls, so a running sweep picks them
+    /// up on the next block. Throws <see cref="ArgumentOutOfRangeException"/> for values the
+    /// radio rejects (see <see cref="RadioGains"/>).
+    /// </summary>
+    void SetGains(int lnaGainDb, int vgaGainDb);
+
+    /// <summary>Switch the 14 dB RF amplifier on or off. Off is the default and the safe state.</summary>
+    void SetRfAmplifier(bool enabled);
+
+    /// <summary>Switch antenna (bias-tee) power on or off. Off by default; the UI confirms first.</summary>
+    void SetAntennaPower(bool enabled);
 }
 
 /// <summary>Carries one <see cref="Core.SpectrumFrame"/>.</summary>
