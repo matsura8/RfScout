@@ -1,6 +1,20 @@
-* text=auto
-*.ps1 text eol=crlf
-*.cmd text eol=crlf
-*.sln text eol=crlf
+# Check text out as CRLF on every machine, whatever core.autocrlf says, to match
+# end_of_line = crlf in .editorconfig. Without eol=crlf a clone made with
+# core.autocrlf=input (Apache's system Git default) gets LF and `dev lint` fails.
+# The repository itself still stores LF.
+* text=auto eol=crlf
+
+# Shell scripts run under bash and need LF.
+*.sh text eol=lf
+
+# Binaries: never convert, never diff as text.
 *.png binary
 *.ico binary
+*.jpg binary
+*.dll binary
+*.exe binary
+*.lib binary
+*.pdb binary
+*.zip binary
+*.pfx binary
+*.cer binary
