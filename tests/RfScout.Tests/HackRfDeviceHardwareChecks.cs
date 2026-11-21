@@ -10,6 +10,7 @@ namespace RfScout.Tests;
 /// and dotnet test --filter-trait Category=Hardware.
 /// </summary>
 [Trait("Category", "Hardware")]
+[Collection(HardwareCollection.Name)]
 public sealed class HackRfDeviceHardwareChecks
 {
     private static void RequireHardware()
