@@ -3,8 +3,8 @@ using RfScout.Core;
 namespace RfScout.Tests;
 
 /// <summary>
-/// <c>--self-test</c> is the smoke run that <c>dev test</c>, CI, packaging and the Windows
-/// Sandbox round all rely on, so it has to be covered by an ordinary test too: a self-test that
+/// <c>--self-test</c> is the smoke run that CI and packaging rely on, so it has to be covered by
+/// an ordinary test too: a self-test that
 /// silently stops checking anything is worse than no self-test.
 /// </summary>
 public sealed class SelfTestTests

@@ -1,7 +1,5 @@
 # Check text out as CRLF on every machine, whatever core.autocrlf says, to match
-# end_of_line = crlf in .editorconfig. Without eol=crlf a clone made with
-# core.autocrlf=input (Apache's system Git default) gets LF and `dev lint` fails.
-# The repository itself still stores LF.
+# end_of_line = crlf in .editorconfig (dotnet format checks it). The repository stores LF.
 * text=auto eol=crlf
 
 # Shell scripts run under bash and need LF.

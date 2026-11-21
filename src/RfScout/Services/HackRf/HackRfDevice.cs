@@ -181,9 +181,9 @@ public sealed unsafe class HackRfDevice : IRadioSource
     RadioDeviceInfo? IRadioSource.DeviceInfo => DeviceInfo;
 
     /// <summary>
-    /// True when the HackRF shares its USB hub with other devices. Apache's built-in hub also
-    /// feeds the card reader, smart-card reader, Bluetooth and the MSI receiver, and that is the
-    /// usual cause of dropped blocks at 20 Msps - worth knowing before blaming the code.
+    /// True when the HackRF shares its USB hub with other devices. Laptop hubs often also feed
+    /// card readers, Bluetooth and other internal devices, and that is the usual cause of
+    /// dropped blocks at 20 Msps - worth knowing before blaming the code.
     /// </summary>
     public bool BusSharesUsb { get; private set; }
 

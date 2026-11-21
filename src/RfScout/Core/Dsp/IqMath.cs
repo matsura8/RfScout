@@ -7,7 +7,7 @@ namespace RfScout.Core.Dsp;
 /// Hot-path DSP on interleaved signed 8-bit I/Q, the format libhackrf delivers.
 ///
 /// The loops here are deliberately plain scalar reads and writes over <see cref="Span{T}"/>:
-/// the .NET JIT auto-vectorises them (measured on Apache's i7-6700HQ at about 230 Msamples/s
+/// the .NET JIT auto-vectorises them (measured on an i7-6700HQ at about 230 Msamples/s
 /// for the s8 conversion and 330 Msamples/s for the envelope), which is well above the 20 Msps
 /// the radio produces, and hand-written intrinsics proved harder to get right than the
 /// headroom they bought. Keep these loops branch-free if you change them.

@@ -5,8 +5,7 @@ namespace RfScout.Services;
 
 /// <summary>
 /// Lists present USB devices through WMI (Win32_PnPEntity). Covered by the Hardware tests.
-/// To talk to a device, use WinUSB via P/Invoke or a library such as LibUsbDotNet / HidSharp
-/// (see C:\workspace\devflow\docs\USB.md).
+/// To talk to a device, use WinUSB via P/Invoke or a library such as LibUsbDotNet / HidSharp.
 /// </summary>
 public static class UsbEnumerator
 {

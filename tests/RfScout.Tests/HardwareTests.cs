@@ -4,9 +4,9 @@ using RfScout.Services;
 namespace RfScout.Tests;
 
 /// <summary>
-/// Tests that need real USB devices. The Hardware trait keeps them out of `dev test` and CI;
-/// `dev test -Hardware` checks the devices declared in devflow.json and sets
-/// DEVFLOW_HARDWARE / DEVFLOW_USB_DEVICES before running them.
+/// Tests that need real USB devices. The Hardware trait keeps them out of the normal test run
+/// and CI. Run them with HARDWARE_TESTS=1 and HARDWARE_USB_DEVICES=hackrf=1d50:6089, then
+/// dotnet test --filter-trait Category=Hardware.
 /// </summary>
 [Trait("Category", "Hardware")]
 public class HardwareTests
@@ -14,12 +14,12 @@ public class HardwareTests
     [Fact]
     public void DeclaredDevicesAreEnumerated()
     {
-        if (Environment.GetEnvironmentVariable("DEVFLOW_HARDWARE") != "1")
+        if (Environment.GetEnvironmentVariable("HARDWARE_TESTS") != "1")
         {
-            Assert.Skip("run with: dev test -Hardware");
+            Assert.Skip("set HARDWARE_TESTS=1 to run hardware tests");
         }
 
-        var wanted = Usb.ParseDeviceList(Environment.GetEnvironmentVariable("DEVFLOW_USB_DEVICES"));
+        var wanted = Usb.ParseDeviceList(Environment.GetEnvironmentVariable("HARDWARE_USB_DEVICES"));
         Assert.NotEmpty(wanted);
         var present = UsbEnumerator.ListDevices();
         foreach (var (name, id) in wanted)

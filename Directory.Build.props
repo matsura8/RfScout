@@ -1,11 +1,11 @@
 <Project>
   <PropertyGroup>
-    <!-- Single source of truth for the version. `dev beta` adds -beta.N at package time. -->
+    <!-- Single source of truth for the version. -->
     <Version>0.1.0</Version>
     <Product>RfScout</Product>
     <Copyright>© 2026</Copyright>
 
-    <!-- All build output under out\artifacts (bin/obj/publish), see `dev` Get-BinaryPath. -->
+    <!-- All build output under out\artifacts (bin/obj/publish). -->
     <UseArtifactsOutput>true</UseArtifactsOutput>
     <ArtifactsPath>$(MSBuildThisFileDirectory)out\artifacts</ArtifactsPath>
 
