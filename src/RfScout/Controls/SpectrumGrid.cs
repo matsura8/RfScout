@@ -21,6 +21,9 @@ public class SpectrumGrid : FrameworkElement
     private double _refLevel = -100d;
     private double _dbRange = 120d;
 
+    /// <summary>Upper bound on waterfall columns; the view model clamps the grid to this.</summary>
+    public const int MaxBins = 4096;
+
     /// <summary>Raised for a pointer event with reference-level coordinates.</summary>
     public event Action<double, double>? ProbeRequested;
 

@@ -932,6 +932,20 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         WaterfallHoverText = PlotReadout.Hover(frame, View, xFraction, 0);
     }
 
+    /// <summary>
+    /// A pointer event on the waterfall control, already translated to reference-level coordinates
+    /// (Hz, dBFS) by the control. Public so a test can press the same path the click triggers.
+    /// </summary>
+    public void WaterfallProbe(double frequencyHz, double levelDb)
+    {
+        WaterfallHoverText = string.Format(
+            CultureInfo.InvariantCulture,
+            "{0}  {1}",
+            FrequencyFormat.MHz(frequencyHz),
+            FrequencyFormat.Db(levelDb));
+        RaiseRedraw();
+    }
+
     /// <summary>Record a UI paint so the responsiveness number can be reported and asserted.</summary>
     public void RecordUiPaint(double gapMs)
     {
@@ -1134,3 +1148,4 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     private void OnPropertyChanged([CallerMemberName] string? name = null) =>
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 }
+
