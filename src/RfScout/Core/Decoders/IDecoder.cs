@@ -41,7 +41,8 @@ public sealed record DecoderContext(
     int SampleRateHz,
     IReadOnlyList<BandAllocation> Bands,
     ClassificationResult? Classification,
-    SignalFeatures? Features)
+    SignalFeatures? Features,
+    TrackedPeak? Peak = null)
 {
     /// <summary>
     /// Build the context for one analyzed peak: the band-plan allocations that contain it
@@ -57,6 +58,31 @@ public sealed record DecoderContext(
     {
         ArgumentNullException.ThrowIfNull(bandPlan);
         return new DecoderContext(iq, centerHz, sampleRateHz, bandPlan.AllocationsAt(centerHz), classification, features);
+    }
+
+    /// <summary>
+    /// Build the context for one analyzed peak and carry the peak itself, so a decoder that wants
+    /// the tracker's own measurements (duty cycle, bandwidth class, burst timing) can read them
+    /// without re-deriving them from the IQ.
+    /// </summary>
+    public static DecoderContext ForPeak(
+        ReadOnlyMemory<byte> iq,
+        long centerHz,
+        int sampleRateHz,
+        BandPlan bandPlan,
+        TrackedPeak? peak,
+        ClassificationResult? classification = null,
+        SignalFeatures? features = null)
+    {
+        ArgumentNullException.ThrowIfNull(bandPlan);
+        return new DecoderContext(
+            iq,
+            centerHz,
+            sampleRateHz,
+            bandPlan.AllocationsAt(centerHz),
+            classification,
+            features,
+            peak);
     }
 
     /// <summary>Sample count the buffer really holds (bytes/2, rounded down to whole samples).</summary>

@@ -60,7 +60,14 @@ public sealed class DecoderPipeline
                 continue;
             }
 
-            if (context.BandWants(decoder.Key) && decoder.Supports(context))
+            bool applies = decoder is Rtl433Bridge
+                // The bridge is "selected" whenever the band names it, even when the binary is
+                // missing (Supports=false): Identify() then sees the empty decode and falls back
+                // to OOK timing, which is the brief's "rtl_433 missing or finds nothing" path.
+                ? Rtl433Bridge.BandApplies(context)
+                : context.BandWants(decoder.Key) && decoder.Supports(context);
+
+            if (applies)
             {
                 named.Add(decoder);
             }
@@ -100,10 +107,11 @@ public sealed class DecoderPipeline
             found.AddRange(part);
         }
 
-        if (found.Count == 0 && !AnyDecoderRan(context))
+        if (found.Count == 0)
         {
-            // Nothing protocol-level applied: still try the timing-only OOK fallback for a
-            // band-named capture whose decode came up empty (rtl_433 missing or silent).
+            // The brief's fallback: when rtl_433 (or any band-named decoder) is missing or found
+            // nothing, the timing-only OOK pulse decoder still reports the keying shape for an
+            // OOK/ASK capture.
             foreach (IDecoder decoder in _decoders)
             {
                 if (decoder.Key == OokPulseDecoder.Key && decoder.Supports(context))
@@ -120,7 +128,7 @@ public sealed class DecoderPipeline
         }
 
         found.Sort(static (a, b) => b.Confidence.CompareTo(a.Confidence));
-        return found;
+        return PeakEnricher.Enrich(context, found);
     }
 
     private static IReadOnlyList<DeviceIdentification> SafeDecode(IDecoder decoder, DecoderContext context)
@@ -139,5 +147,4 @@ public sealed class DecoderPipeline
         }
     }
 
-    private bool AnyDecoderRan(DecoderContext context) => SelectFor(context).Count > 0;
 }

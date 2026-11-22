@@ -50,15 +50,32 @@ public static class ClassificationLabel
     /// </summary>
     private static string LikelyDevice(DecoderContext context, string band)
     {
-        bool bursty = context.Features is not null && context.Features.BurstCount > 8;
-        bool wide = context.Features is not null && context.Features.OccupiedBandwidthHz > 15_000_000;
+        // "Bursty" is the brief's Wi-Fi shape: many short bursts with real gaps. Random or
+        // noise-like bytes key the envelope scan constantly at near-100 % duty, so a burst count
+        // only counts when the on/off scan also shows a credible duty (the classifier's own OOK
+        // gate uses the same band) and the capture looks wideband (measured OBW over 15 MHz or
+        // the classifier's wideband decision).
+        bool wideEvidence = (context.Features is not null && context.Features.OccupiedBandwidthHz > 15_000_000)
+            || context.ClassifiedAs(ModulationClass.OfdmWideband);
+        bool bursty = context.Features is not null
+            && context.Features.BurstCount > 8
+            && context.Features.BurstDutyCycle is > 0.02 and < 0.98;
+        // A wideband OFDM classification is itself the width evidence: the classifier only votes
+        // OfdmWideband when the measured occupied bandwidth already exceeds 15 % of the rate.
+        bool wide = wideEvidence || context.ClassifiedAs(ModulationClass.OfdmWideband);
         bool narrowFsk = context.ClassifiedAs(ModulationClass.Fsk2)
             && context.Features is not null
             && context.Features.OccupiedBandwidthHz < 2_000_000;
 
-        if (band.Contains("Wi-Fi", StringComparison.OrdinalIgnoreCase) || band.Contains("2.4 GHz", StringComparison.OrdinalIgnoreCase))
+        // The classifier's own decision is strong evidence even when the capture's features are
+        // not carried into the context (the pipeline hands decoders the class, not the features).
+        bool ofdmWide = wide || context.ClassifiedAs(ModulationClass.OfdmWideband);
+        bool wifiBand = band.Contains("Wi-Fi", StringComparison.OrdinalIgnoreCase)
+            || band.Contains("2.4 GHz", StringComparison.OrdinalIgnoreCase);
+
+        if (wifiBand)
         {
-            if (wide)
+            if (ofdmWide)
             {
                 return bursty ? "likely Wi-Fi" : "likely Wi-Fi (continuous)";
             }
@@ -66,6 +83,13 @@ public static class ClassificationLabel
             if (narrowFsk)
             {
                 return "likely Bluetooth";
+            }
+
+            // A 2.4 GHz capture with no measured shape at all (no features, no modulation class
+            // decided): the band itself is the evidence, and the brief's example labels it Wi-Fi.
+            if (context.Features is null && context.Classification is null)
+            {
+                return "likely Wi-Fi";
             }
         }
 

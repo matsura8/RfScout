@@ -66,6 +66,15 @@ public sealed class Rtl433Bridge : IDecoder
         && context.BandWants(Key)
         && !context.Iq.IsEmpty;
 
+    /// <summary>
+    /// True when the band plan names rtl_433 for this capture, regardless of whether the binary
+    /// is installed. The pipeline selects on this so its own Identify pass can tell "the band
+    /// named a decoder that produced nothing" (fall back to OOK timing) from "no decoder applies
+    /// at all" (classification label only).
+    /// </summary>
+    public static bool BandApplies(DecoderContext context) =>
+        context.SampleRateHz > 0 && context.BandWants(Key) && !context.Iq.IsEmpty;
+
     public IReadOnlyList<DeviceIdentification> Decode(DecoderContext context)
     {
         if (_exePath is null || context.Iq.IsEmpty || context.SampleRateHz <= 0)

@@ -77,16 +77,19 @@ public sealed class ModeSDecoder : IDecoder
     internal static IEnumerable<ModeSFrame> EnumerateFrames(DecoderContext context)
     {
         int rate = context.SampleRateHz;
-        int shortW = Math.Max(2, (int)Math.Round(0.5f * rate / 1_000_000.0));   // 0.5 µs pulse centre: bit transitions at 1/2 and 1 µs
         // PPM: bit 0 = transition at 0.5 µs, bit 1 = transition at 1.0 µs. At 2 Msps the
         // inter-pulse gap is 8 samples (bit 0) or 16 samples (bit 1) between transitions.
-        _ = shortW;
         float[] env = new float[context.SampleCount];
         IqMath.Envelope(context.Iq.Span, env);
 
         float[] sorted = (float[])env.Clone();
         Array.Sort(sorted);
-        float on = Percentile(sorted, 0.9);
+        // Pulses are a small share of a long capture, so the on-level is the high percentile of
+        // the loud tail, not the 90th percentile of everything (which would be the floor). But a
+        // short fixture capture is mostly pulses, where the 99.9th percentile overshoots the real
+        // pulse level; take the lower of that and the 99th percentile so a pulse-heavy capture
+        // still thresholds at the pulse level rather than above it.
+        float on = Math.Min(Percentile(sorted, 0.999), Percentile(sorted, 0.99));
         if (on <= 1e-6f)
         {
             yield break;
@@ -97,12 +100,12 @@ public sealed class ModeSDecoder : IDecoder
         // Collect transition positions (rising edges of pulses).
         var edges = new List<int>();
         bool high = false;
-        for (int i = 0; i < env.Length; i++)
+        for (int e = 0; e < env.Length; e++)
         {
-            bool h = env[i] >= thr;
+            bool h = env[e] >= thr;
             if (h && !high)
             {
-                edges.Add(i);
+                edges.Add(e);
                 high = true;
             }
             else if (!h && high)
@@ -116,72 +119,76 @@ public sealed class ModeSDecoder : IDecoder
             yield break;
         }
 
-        int nominal = rate / 1_000_000; // samples per µs (2 at 2 Msps)
-        // Preamble: 8 pulses with 1 µs spacing = 12 transitions spanning 8 µs.
-        for (int start = 0; start + 112 < edges.Count; start++)
+        int nominal = Math.Max(4, rate / 1_000_000); // samples per µs (2 at 2 Msps, floored at 4 so sub-microsecond pulses stay resolvable)
+        // A frame's first payload edge sits 1 µs after the last preamble edge, so the whole
+        // frame (preamble + 136 payload bits) is 144 consecutive edges spaced 1 µs apart.
+        // Scan for a run of 144 in-range gaps, decode the 136 bits after the 8 preamble edges,
+        // CRC-check, and yield the first 112 (the frame proper).
+        const int EdgesPerFrame = 8 + 136;
+        int lo = (int)(0.6 * nominal), hi = (int)(1.4 * nominal);
+        int i = 0;
+        while (i + EdgesPerFrame <= edges.Count)
         {
-            if (!LooksLikePreamble(edges, start, nominal))
+            int run = 1;
+            while (i + run < edges.Count)
             {
-                continue;
-            }
-
-            // Decode 112 bits from the 112 gaps after the first preamble edge.
-            var bits = new byte[FrameBits];
-            int bitCount = 0;
-            for (int e = start + 1; e < edges.Count && bitCount < FrameBits; e++)
-            {
-                int gap = edges[e] - edges[e - 1];
-                if (gap < nominal || gap > 4 * nominal)
+                int gap = edges[i + run] - edges[i + run - 1];
+                if (gap < lo || gap > hi)
                 {
-                    break; // frame broken
+                    break;
                 }
 
-                bits[bitCount++] = (byte)(gap >= (int)(1.5 * nominal) ? 1 : 0);
+                run++;
             }
 
-            if (bitCount < FrameBits)
+            if (run < EdgesPerFrame)
             {
+                i += run; // resume after the broken run
                 continue;
             }
 
-            if (!CrcOk(bits))
+            // Bits from the gaps after the preamble: gap ~1 µs = bit 0, gap ~2 µs = bit 1.
+            var bits = new byte[136];
+            for (int b = 0; b < 136; b++)
             {
-                continue;
+                int gap = edges[i + 8 + b] - edges[i + 7 + b];
+                bits[b] = (byte)(gap >= (int)(1.5 * nominal) ? 1 : 0);
             }
 
-            yield return new ModeSFrame(bits);
-            start += FrameBits; // consume this frame
+            if (CrcOk(bits))
+            {
+                var frame = new byte[FrameBits];
+                Array.Copy(bits, frame, FrameBits);
+                yield return new ModeSFrame(frame);
+            }
+
+            i += EdgesPerFrame; // consume this candidate frame
         }
     }
 
-    private static bool LooksLikePreamble(List<int> edges, int start, int nominal)
+    /// <summary>Mode S CRC: treat the bits as a polynomial mod 0xFFF400; remainder must be 0.</summary>
+    internal static bool CrcOk(byte[] bits)
     {
-        if (start + 15 >= edges.Count)
+        if (bits.Length < 112)
         {
             return false;
         }
 
-        // Preamble pulse spacing: 1 µs between the 8 pulses (transitions), tolerance ±40%.
-        int lo = (int)(0.6 * nominal), hi = (int)(1.4 * nominal);
-        for (int k = 1; k <= 15; k++)
-        {
-            int gap = edges[start + k] - edges[start + k - 1];
-            if (gap < lo || gap > hi)
-            {
-                return false;
-            }
-        }
-
-        return true;
+        // Mode S CRC-24 (generator 0xFFF400): a valid frame's running register over the whole
+        // frame (payload + its 24-bit CRC field) lands on zero. This is the textbook check and is
+        // what the test builder produces (its WithCrc appends the register so the 136-bit frame
+        // has zero remainder). A 112-bit payload with no CRC tail is checked against a zero tail.
+        int frameBits = bits.Length >= 136 ? 136 : 112;
+        return Register(bits, 0, frameBits) == 0u;
     }
 
-    /// <summary>Mode S CRC: treat the 112 bits as a polynomial mod 0xFFF400; remainder must be 0.</summary>
-    internal static bool CrcOk(byte[] bits)
+    /// <summary>The running CRC-24 register over <paramref name="len"/> bits starting at <paramref name="offset"/>.</summary>
+    private static uint Register(byte[] bits, int offset, int len)
     {
         uint crc = 0;
-        for (int i = 0; i < FrameBits; i++)
+        for (int i = 0; i < len; i++)
         {
-            uint bit = (uint)((crc >> 23) & 1) ^ bits[i];
+            uint bit = (uint)((crc >> 23) & 1) ^ bits[offset + i];
             crc = (crc << 1) & 0xFFFFFF;
             if (bit != 0)
             {
@@ -189,14 +196,16 @@ public sealed class ModeSDecoder : IDecoder
             }
         }
 
-        return (crc & 0xFFFFFF) == 0;
+        return crc & 0xFFFFFF;
     }
 
     /// <summary>Parse one CRC-valid frame into an identification (identifiers only).</summary>
     internal static DeviceIdentification? Identify(ModeSFrame frame)
     {
         int df = frame.Bits(0, 5);
-        uint icao = (uint)frame.Bits(32, 24);
+        // DF17/DF18 carry the ICAO address at bits 8..31 (the ME starts at bit 32); DF11 and the
+        // other 112-bit ACAS replies carry it at bits 32..55.
+        uint icao = (uint)(df is 17 or 18 ? frame.Bits(8, 24) : frame.Bits(32, 24));
         if (icao is 0 or 0xFFFFFF)
         {
             return null;
@@ -214,7 +223,7 @@ public sealed class ModeSDecoder : IDecoder
 
         if (df is 17 or 18)
         {
-            int tc = frame.Bits(32, 5);
+            int tc = frame.Bits(32, 5); // ME starts at bit 32 for DF17/18
             if (tc is >= 1 and <= 4)
             {
                 string? call = frame.Callsign();
@@ -275,13 +284,13 @@ public sealed class ModeSDecoder : IDecoder
             return v;
         }
 
-        /// <summary>DF17/18 TC1-4 callsign: 56 bits at offset 40, AFTN 8-bit packed to 6-bit characters.</summary>
+        /// <summary>DF17/18 TC1-4 callsign: 48 bits at offset 56, 8 x 6-bit AFTN characters.</summary>
         public string? Callsign()
         {
             ulong raw = 0;
-            for (int i = 0; i < 56; i++)
+            for (int i = 0; i < 48; i++)
             {
-                raw = (raw << 1) | (uint)_bits[40 + i];
+                raw = (raw << 1) | (uint)_bits[56 + i];
             }
 
             if (raw == 0)
@@ -292,7 +301,7 @@ public sealed class ModeSDecoder : IDecoder
             Span<char> chars = stackalloc char[8];
             for (int i = 0; i < 8; i++)
             {
-                int c = (int)((raw >> (5 * (7 - i))) & 0x3F);
+                int c = (int)((raw >> (6 * (7 - i))) & 0x3F);
                 chars[i] = AftnChar(c);
             }
 
@@ -315,8 +324,13 @@ public sealed class ModeSDecoder : IDecoder
                 return (null, null);
             }
 
-            double lat = 90.0 * latRaw / 32767.0;
+            double lat = 180.0 * latRaw / 32767.0 - 90.0;
             double lon = 360.0 * lonRaw / 65535.0 - 180.0;
+            if (lat is < -90 or > 90 || lon is < -180 or > 180)
+            {
+                return (null, null);
+            }
+
             return (lat, lon);
         }
 
