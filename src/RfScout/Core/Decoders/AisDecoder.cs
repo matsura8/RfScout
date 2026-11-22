@@ -1,4 +1,4 @@
-﻿using System.Globalization;
+using System.Globalization;
 using RfScout.Core.Analysis;
 using RfScout.Core.Dsp;
 
@@ -306,62 +306,62 @@ public sealed class AisDecoder : IDecoder
         switch (msgType)
         {
             case 1 or 2 or 3:
-            {
-                // Position report: navigational status + ROT + SOG + position accuracy; lon/lat at 58/88.
-                (double? lat, double? lon) = ReadPosition(payload, 61, 28, 89, 28);
-                AddPosition(extra, lat, lon);
-                break;
-            }
-
-            case 4 or 11:
-            {
-                (double? lat, double? lon) = ReadPosition(payload, 67, 28, 95, 28);
-                AddPosition(extra, lat, lon);
-                id = mmsiText; // base station / AIS satellite: still an emitter identity
-                break;
-            }
-
-            case 5:
-            {
-                string? name = ReadAisString(payload, 160, 42); // 7 x 6-bit characters
-                if (name is not null)
                 {
-                    id = name;
-                    extra["name"] = name;
+                    // Position report: navigational status + ROT + SOG + position accuracy; lon/lat at 58/88.
+                    (double? lat, double? lon) = ReadPosition(payload, 61, 28, 89, 28);
+                    AddPosition(extra, lat, lon);
+                    break;
                 }
 
-                break;
-            }
-
-            case 18:
-            {
-                (double? lat, double? lon) = ReadPosition(payload, 57, 28, 85, 28);
-                AddPosition(extra, lat, lon);
-                break;
-            }
-
-            case 24:
-            {
-                int partNo = ReadBits(payload, 38, 1);
-                if (partNo == 0)
+            case 4 or 11:
                 {
-                    string? name = ReadAisString(payload, 40, 42);
+                    (double? lat, double? lon) = ReadPosition(payload, 67, 28, 95, 28);
+                    AddPosition(extra, lat, lon);
+                    id = mmsiText; // base station / AIS satellite: still an emitter identity
+                    break;
+                }
+
+            case 5:
+                {
+                    string? name = ReadAisString(payload, 160, 42); // 7 x 6-bit characters
                     if (name is not null)
                     {
                         id = name;
                         extra["name"] = name;
                     }
-                }
-                else
-                {
-                    int dimA = ReadBits(payload, 46, 9);
-                    int dimB = ReadBits(payload, 55, 9);
-                    extra["dim_a"] = dimA.ToString(CultureInfo.InvariantCulture);
-                    extra["dim_b"] = dimB.ToString(CultureInfo.InvariantCulture);
+
+                    break;
                 }
 
-                break;
-            }
+            case 18:
+                {
+                    (double? lat, double? lon) = ReadPosition(payload, 57, 28, 85, 28);
+                    AddPosition(extra, lat, lon);
+                    break;
+                }
+
+            case 24:
+                {
+                    int partNo = ReadBits(payload, 38, 1);
+                    if (partNo == 0)
+                    {
+                        string? name = ReadAisString(payload, 40, 42);
+                        if (name is not null)
+                        {
+                            id = name;
+                            extra["name"] = name;
+                        }
+                    }
+                    else
+                    {
+                        int dimA = ReadBits(payload, 46, 9);
+                        int dimB = ReadBits(payload, 55, 9);
+                        extra["dim_a"] = dimA.ToString(CultureInfo.InvariantCulture);
+                        extra["dim_b"] = dimB.ToString(CultureInfo.InvariantCulture);
+                    }
+
+                    break;
+                }
 
             default:
                 return null; // types the brief does not ask for: classify-only elsewhere

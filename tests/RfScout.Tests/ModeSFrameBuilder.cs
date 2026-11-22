@@ -1,4 +1,4 @@
-﻿// Builds CRC-valid Mode S / ADS-B frames and their 2 Msps PPM envelope IQ for the M4 tests.
+// Builds CRC-valid Mode S / ADS-B frames and their 2 Msps PPM envelope IQ for the M4 tests.
 namespace RfScout.Tests;
 
 internal static class ModeSFrameBuilder

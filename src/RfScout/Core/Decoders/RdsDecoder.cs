@@ -1,4 +1,4 @@
-﻿using System.Globalization;
+using System.Globalization;
 using RfScout.Core.Analysis;
 using RfScout.Core.Dsp;
 

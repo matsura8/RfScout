@@ -1,4 +1,4 @@
-﻿// M4 unit tests for the decoder model, selection pipeline and classification-only labels.
+// M4 unit tests for the decoder model, selection pipeline and classification-only labels.
 // Fixtures here are synthetic (generated in-test); published-vector tests live in the
 // per-decoder test files and cite their vector source in a comment.
 using RfScout.Core;
