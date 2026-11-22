@@ -260,7 +260,7 @@ public sealed class SweepPipelineHardwareTests
         Assert.NotNull(radio.WaitForCapture(TimeSpan.FromSeconds(10)));
     }
 
-    private static HackRfDevice OpenRadio()
+    internal static HackRfDevice OpenRadio()
     {
         if (Environment.GetEnvironmentVariable("HARDWARE_TESTS") != "1")
         {

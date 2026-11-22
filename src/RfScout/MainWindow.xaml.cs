@@ -5,6 +5,7 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using RfScout.Controls;
+using RfScout.Core;
 using RfScout.Core.Display;
 
 namespace RfScout;
@@ -22,6 +23,7 @@ public partial class MainWindow : Window
     private long _lastSequence;
     private long _lastWaterfallWrite;
     private bool _waterfallPainted;
+    private int _markerCount;
 
     public MainWindow()
     {
@@ -35,6 +37,52 @@ public partial class MainWindow : Window
 
         Loaded += (_, _) => RenderFrame();
         Closed += (_, _) => _renderTimer.Stop();
+    }
+
+    /// <summary>Arrow keys move between peaks; Space and Enter keep their sweep/analyze meaning.</summary>
+    private void OnPeakTableKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (DataContext is not ViewModels.MainViewModel model)
+        {
+            return;
+        }
+
+        switch (e.Key)
+        {
+            case System.Windows.Input.Key.Up:
+                model.MovePeakSelection(-1);
+                e.Handled = true;
+                break;
+            case System.Windows.Input.Key.Down:
+                model.MovePeakSelection(+1);
+                e.Handled = true;
+                break;
+        }
+    }
+
+    /// <summary>A header click: route the sort through the view model so the filter stays applied.</summary>
+    private void OnPeakTableSorting(object sender, System.Windows.Controls.DataGridSortingEventArgs e)
+    {
+        if (DataContext is ViewModels.MainViewModel model && e.Column?.Header is string header)
+        {
+            string column = header switch
+            {
+                "ID" => "Id",
+                "Frequency" => "Frequency",
+                "Power" => "Power",
+                "SNR" => "Snr",
+                "BW" => "Bandwidth",
+                "Duty" => "Duty",
+                "Type" => "Type",
+                "Band" => "Band",
+                "Best guess" => "BestGuess",
+                "Last seen" => "LastSeen",
+                _ => "Power",
+            };
+
+            model.TogglePeakSort(column);
+            e.Handled = true;
+        }
     }
 
     /// <summary>A click on the waterfall: report the frequency and level under the pointer.</summary>
@@ -82,7 +130,14 @@ public partial class MainWindow : Window
             }
         }
 
-        if (_waterfallPainted)
+        IReadOnlyList<PeakMarker> markers = model.PeekMarkers();
+        if (markers.Count != _markerCount || markers.Count > 0)
+        {
+            Waterfall.SetMarkers(markers);
+            _markerCount = markers.Count;
+        }
+
+        if (_waterfallPainted || markers.Count > 0)
         {
             Waterfall.InvalidateVisual();
         }

@@ -20,6 +20,7 @@ public class SpectrumGrid : FrameworkElement
     private long _spanHz = 1_000_000L;
     private double _refLevel = -100d;
     private double _dbRange = 120d;
+    private IReadOnlyList<Core.Display.PeakMarker> _markers = [];
 
     /// <summary>Upper bound on waterfall columns; the view model clamps the grid to this.</summary>
     public const int MaxBins = 4096;
@@ -44,6 +45,13 @@ public class SpectrumGrid : FrameworkElement
         }
 
         Dispatcher.InvokeAsync(() => _host.InvalidateVisual(), DispatcherPriority.Render);
+    }
+
+    /// <summary>Replace the peak markers drawn as vertical ticks across the waterfall.</summary>
+    public void SetMarkers(IReadOnlyList<Core.Display.PeakMarker> markers)
+    {
+        ArgumentNullException.ThrowIfNull(markers);
+        _markers = markers;
     }
 
     /// <summary>Updates the axis mapping used to translate pixels to Hz / dBFS.</summary>
@@ -124,7 +132,32 @@ public class SpectrumGrid : FrameworkElement
                 context.DrawImage(bitmap, new Rect(0d, 0d, ActualWidth, ActualHeight));
             }
 
+            DrawMarkers(context);
             DrawAxes(context);
+        }
+
+        private void DrawMarkers(DrawingContext context)
+        {
+            IReadOnlyList<Core.Display.PeakMarker> markers = _owner._markers;
+            if (markers.Count == 0)
+            {
+                return;
+            }
+
+            double width = ActualWidth;
+            double height = ActualHeight;
+            foreach (Core.Display.PeakMarker marker in markers)
+            {
+                double fraction = (marker.CenterHz - (_owner._centerHz - (_owner._spanHz / 2))) / _owner._spanHz;
+                if (fraction < 0 || fraction > 1)
+                {
+                    continue;
+                }
+
+                double x = fraction * width;
+                var pen = new Pen(marker.Selected ? Brushes.Yellow : Brushes.Lime, marker.Selected ? 2d : 1d);
+                context.DrawLine(pen, new Point(x, 0d), new Point(x, Math.Min(12d, height)));
+            }
         }
 
         private void DrawAxes(DrawingContext context)
