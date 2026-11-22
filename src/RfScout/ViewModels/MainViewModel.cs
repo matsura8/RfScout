@@ -1526,9 +1526,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
                     {
                         // The fake sources raise CaptureAvailable synchronously, so the task is
                         // already settled; this just keeps a source that never fires from hanging a test.
-                        capture = await Task.WhenAny(tcs.Task, Task.Delay(5000)).ConfigureAwait(false) is Task<IqCapture> done
-                            ? await done.ConfigureAwait(false)
-                            : throw new TimeoutException("the source produced no capture");
+                        capture = await tcs.Task.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
                     }
                     else
                     {
