@@ -87,11 +87,13 @@ public static class SyntheticSignal
 public sealed class SyntheticRadioSource : IRadioSource
 {
     /// <summary>
-    /// Header step that tiles a span exactly: a block keeps [header, header + 5 MHz] and
-    /// [header + 10 MHz, header + 15 MHz], so advancing the header by 15 MHz per block leaves no
-    /// gap and no overlap.
+    /// Header step that tiles a span exactly. A block measures
+    /// <c>header + 2.5 MHz .. header + 12.5 MHz</c> (the two quarters either side of its tuned
+    /// centre), so advancing the header by half the sample rate makes the bands abut with no gap
+    /// and no overlap - the same coverage the real interleaved sweep adds up to, which it reaches
+    /// by stepping a quarter of its tune step and then three quarters.
     /// </summary>
-    public const long DefaultStepHz = SweepMath.SampleRateHz * 3 / 4;
+    public const long DefaultStepHz = SweepMath.SampleRateHz / 2;
 
     /// <summary>Identity a fake source reports, so the status bar and About box have something
     /// honest to show when no radio is present.</summary>

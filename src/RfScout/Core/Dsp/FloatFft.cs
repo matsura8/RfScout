@@ -171,9 +171,13 @@ public sealed class FloatFft
         ref float o = ref MemoryMarshal.GetReference(powerOut);
 
         // hackrf_sweep keeps raw FFT bins 5N/8..7N/8-1 and N/8..3N/8-1 and drops the half around
-        // DC, where the tuned centre's own spike and the image land. The first group is the lower
-        // half of the sampled band (negative frequencies), the second the upper half, so the
-        // output runs low quarter then high quarter on a rising frequency axis. Bit reversal is
+        // DC, where the tuned centre's own spike and the image land. Those raw bins are signed bins
+        // -3N/8..-N/8-1 and +N/8..+3N/8-1 about the tuned centre, so each group's first bin sits
+        // exactly on the band edge the tool prints: header, and header + fs/2. The first group is
+        // the lower half of the sampled band (negative frequencies), the second the upper half, so
+        // the output runs low quarter then high quarter on a rising frequency axis and output index
+        // i is header + i * binWidth in the low group and header + fs/2 + (i - N/4) * binWidth in
+        // the high one - whole bin steps, no half-bin offset, at any FFT length. Bit reversal is
         // folded into the scatter, so there is still no permutation pass.
         for (int j = 0; j < quarter; j++)
         {

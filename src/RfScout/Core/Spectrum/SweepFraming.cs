@@ -78,18 +78,50 @@ public static class SweepMath
     }
 
     /// <summary>
-    /// Frequency of the lower edge of kept bin 0, relative to the block header value: the header
-    /// <em>is</em> the low edge of the first kept quarter (upstream prints its first row as
-    /// <c>[header, header + fs/4]</c>).
+    /// Frequency of the lower edge of the first kept band, relative to the block header. It is the
+    /// header itself: <c>hackrf_sweep</c> writes the band edges <c>[header, header + fs/4]</c> next
+    /// to the first kept quarter and <c>[header + fs/2, header + 3fs/4]</c> next to the second, and
+    /// the interleaved headers step so those bands tile the span. The first kept bin's centre is
+    /// then on that edge - see <see cref="BinOffsetHz"/>.
     /// </summary>
     public const double FirstBinEdgeHz = 0;
 
     /// <summary>
-    /// Centre frequency of kept bin <paramref name="index"/> relative to the header. A block keeps
-    /// two quarters of its FFT with a gap in the middle (the gap is where the tuned centre's DC
-    /// spike and the image land), so the mapping is piecewise:
-    /// bins <c>0 .. N/4-1</c> cover <c>header .. header + fs/4</c> and bins
-    /// <c>N/4 .. N/2-1</c> cover <c>header + fs/2 .. header + 3fs/4</c>.
+    /// Centre frequency of kept bin <paramref name="index"/> relative to the block header value.
+    ///
+    /// This is the one place the radio's sweep format has to be right, so it is taken from
+    /// <c>hackrf_sweep.c</c> line by line rather than reasoned about. A block is sampled while the
+    /// radio is tuned to <c>header + offset</c> but the block itself only carries the bare header,
+    /// so its FFT is centred on <c>header + SweepOffsetHz</c>. The tool keeps two quarters of that
+    /// FFT and throws away the half around DC, where the tuned centre's own spike and the image
+    /// land:
+    ///
+    ///  * raw bins <c>5N/8 .. 7N/8</c>, the negative frequencies, which it prints under the band
+    ///    edges <c>[header, header + fs/4]</c>;
+    ///  * raw bins <c>N/8 .. 3N/8</c>, the positive frequencies, printed under
+    ///    <c>[header + fs/2, header + 3fs/4]</c>.
+    ///
+    /// <see cref="Dsp.FloatFft.PowerQuarters"/> returns exactly those two groups in that order, so
+    /// the mapping is piecewise with a 5 MHz gap in the middle: bins <c>0 .. N/4-1</c> sit at
+    /// <c>header + i * binWidth</c> and bins <c>N/4 .. N/2-1</c> at
+    /// <c>header + fs/2 + (i - N/4) * binWidth</c>. Both groups land on whole bin steps above the
+    /// header at any FFT length: a kept quarter is 3N/8 bins wide, and raw bin N/8 - the high
+    /// group's first - is fs/8 above the tuned centre, which is exactly the printed fs/2 edge.
+    ///
+    /// Those are bin *centres*, not edges: a tone exactly at a bin's centre frequency puts all its
+    /// power in that bin, which is what <c>FloatFftTests</c> pins down bin for bin against a naive
+    /// DFT. Writing the first group as <c>(i + 0.5) * binWidth</c> instead - a natural mistake when
+    /// reading "bin 0 covers 0 .. binWidth" - shifts the entire spectrum up by half a bin, which on
+    /// a 625 kHz display grid is 9765 Hz and invisible until a marker is placed on a known carrier.
+    ///
+    /// Upstream prints the same rows starting one bin higher (<c>1 + 5N/8</c> and <c>1 + N/8</c>)
+    /// because the bin on the quarter edge is the one next to DC, and its skirt is the tuned
+    /// centre's own spike. RfScout keeps that bin, so it measures half a bin wider at each band edge
+    /// than the tool's listing - coverage the interleaved headers overlap anyway.
+    ///
+    /// Get this wrong and the display is wrong in a way that looks like radio: treat the two
+    /// quarters as one continuous ramp and every tenth hole in a 1-6000 MHz sweep appears to be a
+    /// real emission gap.
     /// </summary>
     public static double BinOffsetHz(int fftLength, int index)
     {
@@ -101,13 +133,49 @@ public static class SweepMath
 
         int quarter = bins / 2;
         double binWidth = BinWidthHz(fftLength);
+
+        // Bin centres, on the whole-bin-step grid the extraction actually reads. The low group starts
+        // on the header; the high group's first bin is raw N/8, which is fs/8 above the tuned centre,
+        // i.e. exactly on the printed fs/2 band edge (bins/8 is fs/8 in bin steps, and quarter +
+        // fs/8 = fs/2).
         return index < quarter
-            ? (index + 0.5) * binWidth
-            : (SampleRateHz / 2.0) + ((index - quarter) + 0.5) * binWidth;
+            ? index * binWidth
+            : ((SampleRateHz / 2.0) + ((index - quarter) * binWidth));
     }
+
     /// <summary>Tuned RF centre for a block, from its header value.</summary>
     public static long TunedCenterHz(long headerFrequencyHz) => headerFrequencyHz + SweepOffsetHz;
 
+    /// <summary>
+    /// The tune step the firmware is programmed with: one sample rate in Hz, which is what
+    /// <c>hackrf_sweep.c</c> passes as <c>TUNE_STEP * FREQ_ONE_MHZ</c>. This is not a rounding
+    /// detail: the interleaved sub-steps are a quarter and three quarters of it, so programming
+    /// half the step width leaves a 1.25 MHz hole every 5 MHz of the span.
+    /// </summary>
+    public const long TuneStepHz = SampleRateHz;
+
+    /// <summary>
+    /// Header of the <paramref name="blockIndex"/>th block of a range, following the firmware's
+    /// interleaved advance (<c>usb_api_sweep.c</c> lines 194-209): one dwell steps by a quarter of
+    /// the tune step, the next by three quarters, alternating. Headers therefore run start,
+    /// start + fs/8, start + fs, start + fs + fs/8, and so on.
+    ///
+    /// Each block measures two fs/4 bands with fs/4 missing between them, and the quarter-step
+    /// block measures exactly the band the block before it dropped. That is what makes a span tile:
+    /// every pair of blocks advances one tune step and measures exactly one tune step, so a pass
+    /// over 1-6000 MHz is about 600 blocks and every display bin is filled.
+    /// </summary>
+    public static long InterleavedHeaderHz(long startHz, int blockIndex)
+    {
+        if (blockIndex < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(blockIndex), blockIndex, "Block index must be zero or more.");
+        }
+
+        long pairs = blockIndex / 2;
+        long withinPair = (blockIndex % 2) == 0 ? 0 : (TuneStepHz / 4);
+        return startHz + (pairs * TuneStepHz) + withinPair;
+    }
     /// <summary>Reads a 10-byte block header; false when the magic or the range is wrong.</summary>
     public static bool TryReadBlockHeader(ReadOnlySpan<byte> block, out long headerFrequencyHz)
     {

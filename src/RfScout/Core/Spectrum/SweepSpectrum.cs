@@ -82,10 +82,14 @@ public sealed class SweepSpectrumProcessor
     }
 
     /// <summary>
-    /// Scatter one block's bins into a shared grid. Called by <see cref="SpectrumAssembler"/> and
-    /// by tests that want to check where a bin landed.
+    /// Max-merge one block's bins into a shared grid, where 0 means "not measured yet" and any
+    /// positive value is a measurement (the same convention <see cref="SpectrumFrame.EmptyBin"/>
+    /// converts). Called by <see cref="SpectrumAssembler"/> and by tests that want to check where
+    /// a bin landed.
     /// </summary>
-    public void Scatter(SweepBlock block, ReadOnlySpan<float> blockBins, float[] grid, long startHz, double gridBinWidthHz)
+    /// <returns>How many grid bins went from unmeasured to measured, which is how the assembler
+    /// knows a pass over the span is complete.</returns>
+    public int Scatter(SweepBlock block, ReadOnlySpan<float> blockBins, float[] grid, long startHz, double gridBinWidthHz)
     {
         ArgumentNullException.ThrowIfNull(grid);
         if (blockBins.Length != BinsPerBlock)
@@ -93,16 +97,58 @@ public sealed class SweepSpectrumProcessor
             throw new ArgumentException($"Expected {BinsPerBlock} block bins, got {blockBins.Length}.", nameof(blockBins));
         }
 
+        // A block bin is a bar BinWidthHz wide centred on BinOffsetHz, so it belongs to every grid
+        // bin that bar overlaps. Reducing that to "the one bin its centre falls in" loses a quarter
+        // of the span when the grid is coarser than the block bins: the block bins sit on a fixed
+        // 19531.25 Hz comb, and when the grid pitch is a whole multiple of that comb only every
+        // third bin receives a value, so the spectrum shows a regular comb of holes, the peak
+        // detector sees a sawtooth noise floor, and a sweep never reports itself complete because
+        // the skipped bins never fill.
         double blockBinHz = BinWidthHz;
+        double halfBlockBin = blockBinHz / 2;
+
+        int newlyMeasured = 0;
         for (int i = 0; i < blockBins.Length; i++)
         {
-            double hz = block.HeaderFrequencyHz + SweepMath.BinOffsetHz(FftLength, i);
-            int index = (int)((hz - startHz) / gridBinWidthHz);
-            if ((uint)index < (uint)grid.Length && blockBins[i] > grid[index])
+            float power = blockBins[i];
+            if (power <= 0f)
             {
-                grid[index] = blockBins[i];
+                continue; // nothing to record, and recording it would claim coverage
+            }
+
+            double centreHz = block.HeaderFrequencyHz + SweepMath.BinOffsetHz(FftLength, i);
+
+            // Bin the bar's two edges instead of its centre. That covers every grid bin the bar
+            // overlaps: the bar is never wider than the grid bins it can span here, so when the
+            // edges land in different bins those bins are neighbours and everything between them
+            // lies inside the bar.
+            // Floor, not a cast: a plain (int) rounds toward zero, so a bar straddling the grid's
+            // lower edge (the first kept bin sits exactly on the header) would lose the half of
+            // itself that lies below it, and a bar straddling a bin boundary above zero would be
+            // credited to the bin above only.
+            int first = (int)Math.Floor((centreHz - halfBlockBin - startHz) / gridBinWidthHz);
+            int last = (int)Math.Floor((centreHz + halfBlockBin - startHz) / gridBinWidthHz);
+
+            for (int index = first; index <= last; index++)
+            {
+                if ((uint)index >= (uint)grid.Length)
+                {
+                    continue;
+                }
+
+                if (grid[index] <= 0f)
+                {
+                    newlyMeasured++;
+                }
+
+                if (power > grid[index])
+                {
+                    grid[index] = power;
+                }
             }
         }
+
+        return newlyMeasured;
     }
 }
 
@@ -138,10 +184,15 @@ public static class SpectrumGrid
 /// <summary>
 /// Collects sweep blocks into full-span <see cref="SpectrumFrame"/>s.
 ///
-/// Every block covers one slice of the span, so the assembler scatters block bins into a shared
-/// grid and publishes a snapshot on a fixed interval. A sweep need not finish before the display
-/// updates - <c>hackrf_sweep</c> behaves the same way - which is what keeps a slow sweep (a
-/// 10 kHz-bin pass over 6 GHz takes seconds) usable.
+/// Every block covers one slice of the span, so the assembler scatters block bins into one grid
+/// that keeps accumulating and publishes a snapshot on a fixed interval: a sweep need not finish
+/// before the display updates, which is what keeps a slow pass usable (hackrf_sweep behaves the
+/// same way). What matters is when that grid resets, and the answer is "when a pass is complete",
+/// not "every refresh". A 1-6000 MHz pass at 20 Msps is about 600 blocks and a quarter of a second,
+/// so clearing on every 100 ms publish would have shown a third of the span and thrown the rest
+/// away, and a narrow span would be reset dozens of times per pass. Until a pass is whole, frames
+/// report <see cref="SpectrumFrame.SweepCompleted"/> = false, and anything that needs complete
+/// sweeps - the noise-floor percentile, the sweep rate in the status bar - waits for one.
 /// </summary>
 public sealed class SpectrumAssembler
 {
@@ -150,10 +201,9 @@ public sealed class SpectrumAssembler
     private readonly long _startHz;
     private readonly long _stopHz;
     private readonly float[] _scratch;
-    private readonly float[] _front;
-    private readonly float[] _back;
+    private readonly float[] _grid;
     private readonly Lock _gate = new();
-    private int _activeIndex;
+    private int _measuredBins;
     private long _lastPublishTicks;
 
     /// <summary>
@@ -186,16 +236,19 @@ public sealed class SpectrumAssembler
         _scratch = new float[_processor.BinsPerBlock];
 
         int bins = Math.Max(1, (int)Math.Ceiling((stopHz - startHz) / binWidthHz));
-        _front = new float[bins];
-        _back = new float[bins];
+        _grid = new float[bins];
         PublishInterval = publishInterval ?? TimeSpan.FromMilliseconds(100);
+
+        // Zero, not "now": the first frame after a start or a plan change should appear as soon
+        // as there is something in it rather than after a whole refresh interval of empty screen.
+        _lastPublishTicks = 0;
     }
 
     /// <summary>Minimum time between published frames.</summary>
     public TimeSpan PublishInterval { get; }
 
     /// <summary>Bins in the assembled grid.</summary>
-    public int BinCount => _front.Length;
+    public int BinCount => _grid.Length;
 
     /// <summary>Display bin width in Hz.</summary>
     public double BinWidthHz => _binWidthHz;
@@ -209,55 +262,100 @@ public sealed class SpectrumAssembler
     /// <summary>Processor used to turn blocks into bins; exposed so tests can feed bins directly.</summary>
     public SweepSpectrumProcessor Processor => _processor;
 
+    /// <summary>Bins measured since the grid was last cleared, i.e. how far through a pass we are.</summary>
+    public int MeasuredBins
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _measuredBins;
+            }
+        }
+    }
+
+    /// <summary>True once every bin has been measured; the next publish closes the sweep.</summary>
+    public bool IsSweepComplete
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _measuredBins >= _grid.Length;
+            }
+        }
+    }
+
     /// <summary>Turn one block's IQ bytes into grid bins.</summary>
     public void AddBlock(SweepBlock block, ReadOnlySpan<byte> iq)
     {
         lock (_gate)
         {
             _processor.Process(iq, _scratch);
-            float[] target = _activeIndex == 0 ? _front : _back;
-            _processor.Scatter(block, _scratch, target, _startHz, _binWidthHz);
+            _measuredBins += _processor.Scatter(block, _scratch, _grid, _startHz, _binWidthHz);
         }
     }
 
-    /// <summary>Is the next frame due yet?</summary>
-    public bool IsDue(DateTimeOffset now) =>
-        (now.UtcTicks - Interlocked.Read(ref _lastPublishTicks)) >= PublishInterval.Ticks;
+    /// <summary>
+    /// Is the next frame due? Due when the refresh interval has passed and something new was
+    /// measured, or as soon as a pass completes - a completed sweep is worth showing immediately
+    /// rather than up to a refresh interval late.
+    /// </summary>
+    public bool IsDue(DateTimeOffset now)
+    {
+        bool complete;
+        lock (_gate)
+        {
+            complete = _measuredBins >= _grid.Length;
+        }
+
+        if (complete)
+        {
+            return true;
+        }
+
+        long last = Interlocked.Read(ref _lastPublishTicks);
+        return (now.UtcTicks - last) >= PublishInterval.Ticks;
+    }
 
     /// <summary>
-    /// Publish the grid as a frame and start the next one empty. The frame owns its array, so the
-    /// UI can keep it while the DSP thread carries on.
+    /// Publish the grid as a frame. The array is copied, so the UI can keep the frame while the
+    /// DSP thread carries on filling the same grid. When this frame completes a pass the grid is
+    /// cleared, so the next frame is the next sweep rather than a peak hold of the last hour.
     /// </summary>
     public SpectrumFrame Publish(DateTimeOffset now)
     {
-        float[] snapshot;
-        float[] next;
+        float[] db;
+        int filled;
+        bool completed;
+
         lock (_gate)
         {
-            snapshot = _activeIndex == 0 ? _front : _back;
-            int other = _activeIndex == 0 ? 1 : 0;
-            _activeIndex = other;
-            next = other == 0 ? _front : _back;
             Interlocked.Exchange(ref _lastPublishTicks, now.UtcTicks);
-        }
 
-        float[] db = new float[snapshot.Length];
-        int filled = 0;
-        for (int i = 0; i < snapshot.Length; i++)
-        {
-            float linear = snapshot[i];
-            if (linear > 0)
+            db = new float[_grid.Length];
+            filled = 0;
+            for (int i = 0; i < _grid.Length; i++)
             {
-                db[i] = (float)IqMath.PowerToDb(linear);
-                filled++;
+                float linear = _grid[i];
+                if (linear > 0)
+                {
+                    db[i] = (float)IqMath.PowerToDb(linear);
+                    filled++;
+                }
+                else
+                {
+                    db[i] = SpectrumFrame.EmptyBin;
+                }
             }
-            else
+
+            completed = _measuredBins >= _grid.Length;
+            if (completed)
             {
-                db[i] = SpectrumFrame.EmptyBin;
+                _grid.AsSpan().Clear();
+                _measuredBins = 0;
             }
         }
-
-        next.AsSpan().Clear();
 
         return new SpectrumFrame
         {
@@ -267,6 +365,7 @@ public sealed class SpectrumAssembler
             PowerDb = db,
             FilledBins = filled,
             UtcTimestamp = now,
+            SweepCompleted = completed,
         };
     }
 
@@ -275,10 +374,9 @@ public sealed class SpectrumAssembler
     {
         lock (_gate)
         {
-            _front.AsSpan().Clear();
-            _back.AsSpan().Clear();
+            _grid.AsSpan().Clear();
+            _measuredBins = 0;
             Interlocked.Exchange(ref _lastPublishTicks, 0);
         }
     }
 }
-

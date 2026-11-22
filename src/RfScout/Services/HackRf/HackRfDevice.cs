@@ -46,6 +46,12 @@ public sealed unsafe class HackRfDevice : IRadioSource
     /// <summary>How often an idle DSP worker asks libhackrf whether the stream is still alive.</summary>
     private const long StreamCheckIntervalMs = 250;
 
+    /// <summary>How many times to look for the radio before reporting it missing, and how long
+    /// to wait between looks. Together about a second and a half, which is how long a HackRF
+    /// takes to come back after closing a stream.</summary>
+    private const int MaxOpenAttempts = 6;
+    private const int OpenRetryPauseMs = 250;
+
     private const long ModeIdle = 0;
     private const long ModeSweep = 1;
     private const long ModeCapture = 2;
@@ -101,6 +107,9 @@ public sealed unsafe class HackRfDevice : IRadioSource
     private long _streamStartedMs;
     private long _lastStreamCheckMs;
 
+    /// <summary>The GCHandle pinning this instance for the running stream, or IntPtr.Zero.</summary>
+    private IntPtr _streamContext;
+
     /// <summary>
     /// Open the first HackRF present, or a specific one by serial. Reads the board id, firmware
     /// version and USB API version, and refuses firmware older than the 1.02 API sweep mode needs.
@@ -122,46 +131,44 @@ public sealed unsafe class HackRfDevice : IRadioSource
         try
         {
             string wanted = (serialNumber ?? string.Empty).Trim();
+
+            // A radio that was streaming a moment ago can take a few hundred milliseconds to come
+            // back: closing a stream resets the USB side of the firmware, and a freshly
+            // initialised libusb enumerates the bus before the device has re-appeared. That is not
+            // a missing radio, and calling it one is how stop-then-start or unplug-then-replug
+            // fails in front of the user, so look for it several times over about a second and a
+            // half before giving up. The last attempt's error is the one reported.
             string serial = wanted;
             string boardFromList = string.Empty;
+            (string Serial, string Board, bool SharesBus, HackRfHandle Handle) opened = default;
+            HackRfException? lastError = null;
 
-            IntPtr list = NativeMethods.hackrf_device_list();
-            try
+            for (int attempt = 0; ; attempt++)
             {
-                NativeMethods.HackrfDeviceList devices = NativeMethods.ReadDeviceList(list);
-                if (devices.DeviceCount > 0)
+                bool more = true;
+                try
                 {
-                    int index = 0;
-                    if (wanted.Length > 0)
-                    {
-                        for (int i = 0; i < devices.DeviceCount; i++)
-                        {
-                            if (string.Equals(devices.SerialNumber(i), wanted, StringComparison.OrdinalIgnoreCase))
-                            {
-                                index = i;
-                                break;
-                            }
-                        }
-                    }
+                    opened = TryOpen(wanted);
+                    break;
+                }
+                catch (HackRfException ex) when (ex.DeviceMissing)
+                {
+                    lastError = ex;
+                    more = attempt < MaxOpenAttempts - 1;
+                }
 
-                    serial = devices.SerialNumber(index);
-                    boardFromList = BoardNameFor(devices.UsbBoardId(index));
-                    BusSharesUsb = NativeMethods.hackrf_device_list_bus_sharing(list, index) == 1;
-                }
-            }
-            finally
-            {
-                if (list != IntPtr.Zero)
+                if (!more)
                 {
-                    NativeMethods.hackrf_device_list_free(list);
+                    throw lastError!;
                 }
+
+                Thread.Sleep(OpenRetryPauseMs);
             }
 
-            int openResult = wanted.Length == 0
-                ? NativeMethods.hackrf_open(out IntPtr raw)
-                : NativeMethods.hackrf_open_by_serial(wanted, out raw);
-            NativeMethods.ThrowForError(openResult, "hackrf_open");
-            handle = new HackRfHandle(raw);
+            serial = opened.Serial;
+            boardFromList = opened.Board;
+            BusSharesUsb = opened.SharesBus;
+            handle = opened.Handle;
             _handle = handle;
 
             DeviceInfo = ReadDeviceInfo(boardFromList, serial);
@@ -190,6 +197,60 @@ public sealed unsafe class HackRfDevice : IRadioSource
             LibHackRf.Shutdown();
             throw;
         }
+    }
+
+    /// <summary>
+    /// One look for the radio: enumerate, pick the serial (or the first HackRF), open it, and
+    /// report what the list said. Throws <see cref="HackRfException"/> when it is not there, which
+    /// the constructor retries.
+    /// </summary>
+    private static (string Serial, string Board, bool SharesBus, HackRfHandle Handle) TryOpen(string wanted)
+    {
+        string serial = wanted;
+        string board = string.Empty;
+        bool sharesBus;
+
+        IntPtr list = NativeMethods.hackrf_device_list();
+        try
+        {
+            NativeMethods.HackrfDeviceList devices = NativeMethods.ReadDeviceList(list);
+            if (devices.DeviceCount == 0)
+            {
+                // An empty list is how libhackrf reports "no HackRF on the bus", which is exactly
+                // what the open would fail with anyway. Say it here, where the list count is known.
+                throw new HackRfException("hackrf_open", NativeMethods.ErrorNotFound, "HackRF not found");
+            }
+
+            int index = 0;
+            if (wanted.Length > 0)
+            {
+                for (int i = 0; i < devices.DeviceCount; i++)
+                {
+                    if (string.Equals(devices.SerialNumber(i), wanted, StringComparison.OrdinalIgnoreCase))
+                    {
+                        index = i;
+                        break;
+                    }
+                }
+            }
+
+            serial = devices.SerialNumber(index);
+            board = BoardNameFor(devices.UsbBoardId(index));
+            sharesBus = NativeMethods.hackrf_device_list_bus_sharing(list, index) == 1;
+        }
+        finally
+        {
+            if (list != IntPtr.Zero)
+            {
+                NativeMethods.hackrf_device_list_free(list);
+            }
+        }
+
+        int result = wanted.Length == 0
+            ? NativeMethods.hackrf_open(out IntPtr raw)
+            : NativeMethods.hackrf_open_by_serial(wanted, out raw);
+        NativeMethods.ThrowForError(result, "hackrf_open");
+        return (serial, board, sharesBus, new HackRfHandle(raw));
     }
 
     public event EventHandler<SpectrumFrameEventArgs>? SpectrumAvailable;
@@ -688,7 +749,15 @@ public sealed unsafe class HackRfDevice : IRadioSource
         }
 
         SpectrumFrame frame = assembler.Publish(now);
-        Interlocked.Increment(ref _sweeps);
+
+        // The status bar promises sweeps per second, so only a frame that closed a pass counts.
+        // The watchdog timestamp and the sample rate still move on every frame, because those
+        // measure liveness of the stream, not the completion of a sweep.
+        if (frame.SweepCompleted)
+        {
+            Interlocked.Increment(ref _sweeps);
+        }
+
         Interlocked.Exchange(ref _lastSweepUtcTicks, now.UtcTicks);
         UpdateRates(now);
         return frame;
@@ -775,12 +844,23 @@ public sealed unsafe class HackRfDevice : IRadioSource
     }
 
     /// <summary>
-    /// Program the firmware sweep list. <c>hackrf_init_sweep</c> wants a packed uint16 array of
-    /// MHz start/stop pairs and counts ranges, not entries. The step width is 10 MHz (half the
-    /// sample rate, i.e. <c>TUNE_STEP</c> in <c>hackrf_sweep.c</c>); with the interleaved style
-    /// the firmware then alternates sub-steps of 7.5 MHz and 2.5 MHz, so block headers advance by
-    /// 250 kHz and the two kept quarters tile the span, which is what
-    /// <see cref="SweepMath"/> assumes when it stitches them.
+    /// Program the firmware sweep list. <c>hackrf_init_sweep</c> wants a packed uint16 array of MHz
+    /// start/stop pairs and counts ranges, not entries.
+    ///
+    /// The step width is the sample rate in Hz - 20 MHz at 20 Msps - which is what
+    /// <c>hackrf_sweep.c</c> programs (<c>TUNE_STEP</c> is the sample rate in MHz and it passes
+    /// <c>TUNE_STEP * FREQ_ONE_MHZ</c>). With the interleaved style the firmware then alternates
+    /// sub-steps of a quarter and three quarters of that, so consecutive block headers advance by
+    /// 5 MHz and then 15 MHz: each block's two kept bands fill the 5 MHz the block before it left
+    /// out, the pair advances 20 MHz and measures exactly 20 MHz, with no gap and no double
+    /// counting.
+    ///
+    /// Half that step width - 10 MHz, which looks just as reasonable because it is the width of the
+    /// two kept bands - puts the headers 2.5 and 7.5 MHz apart, and a pair then covers only
+    /// 17.5 MHz of the 20 MHz it advances: a 1.25 MHz hole every 5 MHz of span, which on a 625 kHz
+    /// display grid is three empty bins in ten right across the range. The spectrum then looks like
+    /// a busy band with a comb through it, and the sweep never reports itself complete because those
+    /// bins never fill. This is the one number in the device layer that has to match upstream.
     /// </summary>
     private void ProgramSweep(SweepPlan plan)
     {
@@ -795,7 +875,7 @@ public sealed unsafe class HackRfDevice : IRadioSource
                     pinned,
                     rangeCount,
                     NativeMethods.BytesPerBlock,
-                    (uint)(SweepMath.SampleRateHz / 2),
+                    (uint)SweepMath.SampleRateHz,
                     (uint)SweepMath.SweepOffsetHz,
                     NativeMethods.SweepStyleInterleaved),
                 "hackrf_init_sweep");
@@ -842,6 +922,7 @@ public sealed unsafe class HackRfDevice : IRadioSource
         GCHandle box = GCHandle.Alloc(this, GCHandleType.Normal);
         IntPtr context = GCHandle.ToIntPtr(box);
         IntPtr handle = _handle.DangerousGetHandle();
+        Volatile.Write(ref _streamContext, context);
         Streams[context] = this;
         Streams[handle] = this;
 
@@ -859,30 +940,22 @@ public sealed unsafe class HackRfDevice : IRadioSource
         Volatile.Write(ref _streamLive, 1);
     }
 
+    /// <summary>
+    /// Detach from the static stream table and release the pin. Only the pointer recorded in
+    /// <see cref="_streamContext"/> is ever treated as a GCHandle: the device pointer libhackrf
+    /// also uses as a key is raw native memory, and GCHandle.FromIntPtr on it yields a handle
+    /// whose Free corrupts the pinning heap - which is how a hardware run died with a
+    /// fail-fast instead of a test failure.
+    /// </summary>
     private void UnmapStream()
     {
         Streams.TryRemove(_handle.DangerousGetHandle(), out _);
-        foreach (IntPtr key in Streams.Keys)
+
+        IntPtr context = Interlocked.Exchange(ref _streamContext, IntPtr.Zero);
+        if (context != IntPtr.Zero)
         {
-            if (Streams.TryGetValue(key, out HackRfDevice? owner) && ReferenceEquals(owner, this))
-            {
-                Streams.TryRemove(key, out _);
-                if (key != IntPtr.Zero)
-                {
-                    try
-                    {
-                        GCHandle box = GCHandle.FromIntPtr(key);
-                        if (box.IsAllocated)
-                        {
-                            box.Free();
-                        }
-                    }
-                    catch (InvalidOperationException)
-                    {
-                        // Not a GCHandle we allocated; nothing to free.
-                    }
-                }
-            }
+            Streams.TryRemove(context, out _);
+            GCHandle.FromIntPtr(context).Free();
         }
     }
 
