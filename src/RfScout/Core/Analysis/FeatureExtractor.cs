@@ -104,24 +104,95 @@ public static class FeatureExtractor
         // Envelope statistics (AM depth, OOK on/off ratio, burst timing).
         float[] env = new float[samples];
         IqMath.Envelope(re, im, env);
-        (double amDepth, double ookRatio, int burstCount, double burstDuty) = EnvelopeStatistics(env);
+        (double amDepth, double ookRatio, int burstCount, double burstDuty) = EnvelopeStatistics(env, sampleRateHz);
 
-        // Instantaneous frequency (FSK tones, FM deviation, tone spacing, symbol rate).
+        // Instantaneous frequency (FSK tones, FM deviation, tone spacing, symbol rate). The
+        // discriminator is smoothed over a short window first: per-sample phase noise makes a
+        // steady tone's frequency swing as wide as a real deviation, and its zero crossings
+        // ripple at the noise rate rather than at a keying rate.
         float[] phase = new float[samples];
         IqMath.Phase(re, im, phase);
         float[] unwrapped = new float[samples];
         IqMath.UnwrapPhase(phase, unwrapped);
-        double[] freqHz = new double[samples];
-        IqMath.InstantaneousFrequencyHz(unwrapped, sampleRateHz, freqHz);
+        double[] freqRaw = new double[samples];
+        IqMath.InstantaneousFrequencyHz(unwrapped, sampleRateHz, freqRaw);
+        // Window: a tenth of the shortest credible keying period (about 10 kBd), floored at
+        // eight samples for noise averaging. Long enough to average per-sample phase noise
+        // (which alone swings an unsmoothed discriminator like a real deviation); short enough
+        // that a 1.5 kHz FM tone and a 4.8 kBd FSK key still swing it at their own rates. AM
+        // sidebands are not rejected here: the AM rule tolerates a loud AM discriminator.
+        double[] freqSmooth = SmoothDouble(freqRaw, Math.Max(8, (int)(sampleRateHz / 100_000.0)));
+
+        // A finer view for the keying estimate: the 20-sample window above is longer than a
+        // 4.8 kBd key period, so its zero-crossing gaps smear the keying rate to zero (and the
+        // raw view's every-second-crossing gaps land inside one symbol on hard keying). A
+        // shorter window still averages the per-sample noise but resolves the key.
+        double[] freqKey = SmoothDouble(freqRaw, Math.Max(4, (int)(sampleRateHz / 400_000.0)));
+
+        // A coarser view for the slow end: a 2.4 kBd key period is 833 samples at 2 Msps, and
+        // the fine window's zero-crossing gaps land inside one symbol there (measured: 111 kBd
+        // against 2.4). Each view is trusted only when its estimate lands inside the sane
+        // keying band, so the views bracket the band between them.
+        double[] freqSlow = SmoothDouble(freqRaw, Math.Max(8, (int)(sampleRateHz / 24_000.0)));
+
+        // A slow view for the slowest keys: a 2.4 kBd key period is 833 samples, so even the
+        // coarse window above sits well inside one symbol. A tenth of that period (83 samples)
+        // still leaves the key's own ripple crossings (measured: 111 kBd), and a whole period
+        // averages them away but drags the estimate down to 1 000 Bd (measured); half a period
+        // lands on the true 2.4 kBd.
+        double[] freqVerySlow = SmoothDouble(freqRaw, Math.Max(8, (int)(sampleRateHz / 12_000.0)));
+
+        // A slower view still: at 4.8 kBd the period is 417 samples, and the half-period window
+        // above still rides the key's own ripple (measured: 111 kBd). A window of a whole
+        // period averages the ripple away and lands on the true rate (measured: 4 804 Bd).
+        double[] freqSlowest = SmoothDouble(freqRaw, Math.Max(8, (int)(sampleRateHz / 4_800.0)));
+
+        // The slowest view: a window as long as the slowest credible key period (2.4 kBd). It
+        // averages that key's ripple away and lands on its true rate, and it is the last view
+        // that resolves anything when the shorter ones only ride ripple.
+        double[] freqSlowKey = SmoothDouble(freqRaw, Math.Max(8, (int)(sampleRateHz / 2_400.0)));
+
+        // The tone histogram runs on the smoothed discriminator. The raw one splits a steady
+        // tone's phase noise into many lobes (measured: six clusters on a plain CW tone), and
+        // no span floor fixes that cleanly; the smoothing window is short enough that a 4.8 kBd
+        // FSK key still resolves its two tones, and the histogram's span must then follow the
+        // signal's own swing so the outer lobes do not fall into the edge bins.
+        // The FM deviation and discriminator-sigma measurements read the smoothed view: the raw
+        // one's per-sample noise swings like a real deviation and would fake one on a steady
+        // tone.
+        double[] freqHz = freqSmooth;
+
+        // (The raw-discriminator keying estimate runs below, once the tone deviation is known.)
         (int toneCount, double fskDeviation, double fmDeviation, double freqSigma, double toneSpacing) =
-            FrequencyStatistics(freqHz, sampleRateHz);
-        double dcOffsetHz = MeanTrimmed(freqHz, sampleRateHz);
+            FrequencyStatistics(freqSmooth, sampleRateHz);
+        double dcOffsetHz = MeanTrimmed(freqSmooth, sampleRateHz);
 
         // Averaged periodogram: occupied bandwidth and spectral flatness.
         (double occupiedHz, double flatnessDb) = SpectralStatistics(re, im, samples, sampleRateHz);
 
-        // Symbol rate from the discriminator's keying transitions.
-        double symbolRate = EstimateSymbolRate(freqHz, fskDeviation, sampleRateHz);
+        // Symbol rate from the discriminator's keying transitions. The keying estimate needs a
+        // finer view than the tone histogram: the smoothing window rounds hard keying edges and
+        // its zero-crossing gaps drift off the true symbol period (measured: 2.4 kBd OOK reads
+        // 28 Bd through it). The raw crossings of a keyed carrier are edge transitions, but
+        // every second raw crossing of a hard-keyed carrier lands inside one symbol (measured:
+        // 2.4 kBd OOK reads 666 kBd raw), so the raw view is only trusted when it lands inside
+        // the sane keying band; otherwise keep the smoothed estimate.
+        // The views disagree on which gaps are keying and which are ripple: the fine window
+        // resolves a 4.8 kBd key but reads a 2.4 kBd key's own ripple as 111 kBd, the slow
+        // window resolves 2.4 kBd but smears 4.8 kBd to nothing. Take the estimate closest to
+        // the centre of the sane keying band rather than the last view standing.
+        static double Distance(double rate) => Math.Abs(Math.Log(rate / 10_000.0));
+        double symbolRate = 0;
+        double bestDistance = double.MaxValue;
+        foreach (double[] view in new[] { freqHz, freqSlowKey, freqSlowest, freqVerySlow, freqSlow, freqKey })
+        {
+            double estimate = EstimateSymbolRate(view, fskDeviation, sampleRateHz);
+            if (estimate is > 50 and < 1_000_000 && Distance(estimate) < bestDistance)
+            {
+                bestDistance = Distance(estimate);
+                symbolRate = estimate;
+            }
+        }
 
         return new SignalFeatures(
             sampleRateHz,
@@ -163,15 +234,30 @@ public static class FeatureExtractor
     /// Envelope pass: AM depth (peak-to-trough over peak-plus-trough of the smoothed envelope),
     /// the OOK on/off level ratio, and a hysteresis scan of on/off bursts.
     /// </summary>
-    private static (double AmDepth, double OokRatioDb, int BurstCount, double BurstDuty) EnvelopeStatistics(float[] env)
+    private static (double AmDepth, double OokRatioDb, int BurstCount, double BurstDuty) EnvelopeStatistics(float[] env, double sampleRateHz)
     {
-        // Light boxcar smoothing (about one ms worth, at least 8 samples) so per-sample noise
-        // does not read as AM.
-        int smooth = Math.Max(8, env.Length / 1000);
+        // Light boxcar smoothing for the burst scan and the on/off ratio: a fixed slice of the
+        // capture (a thousandth of it, at least 8 samples) so per-sample noise does not read as
+        // keying. It must stay far shorter than the shortest credible key period (a 2.4 kBd OOK
+        // key is 833 samples at 2 Msps): the old one-ms floor was 2 000 samples there, longer
+        // than the key itself, and rounded a 240-burst key into a single steady level. But it
+        // must also stay far shorter than the capture: at a tenth of it, the running mean the
+        // scan thresholds against lags a slow key by a tenth of the capture (measured: a 1 s
+        // capture of 2.4 kBd OOK read one burst at 100 % duty against 240 at 64 % on a 0.2 s
+        // capture), and the whole keying collapses again.
+        int smooth = Math.Max(8, Math.Min(env.Length / 1_000, (int)(sampleRateHz / 24_000.0)));
         float[] smoothed = Boxcar(env, smooth);
 
-        double maxLevel = PercentileOf(smoothed, 99.5);
-        double minLevel = PercentileOf(smoothed, 0.5);
+        // AM depth is measured on a window of a tenth of the shortest credible AM audio period
+        // (about 400 Hz): wider, and the on/off levels of a keyed carrier read as AM depth;
+        // much narrower, and per-sample noise inflates the spread of a flat envelope. Both
+        // bounds are thousands of samples at any sane capture rate, so the window never
+        // degenerates to a single-sample spread.
+        int amWindow = Math.Max(smooth, (int)(sampleRateHz / 4_000.0));
+        float[] amSmoothed = Boxcar(env, amWindow);
+
+        double maxLevel = PercentileOf(amSmoothed, 99.5);
+        double minLevel = PercentileOf(amSmoothed, 0.5);
         double onLevel = PercentileOf(smoothed, 90);
         double offLevel = PercentileOf(smoothed, 10);
 
@@ -184,7 +270,9 @@ public static class FeatureExtractor
             : onLevel > 0 ? 60 : 0;
 
         // Burst scan with hysteresis: on above (mean * 10^(-OffThreshold/40 dB)), off below
-        // (mean * 10^(-OffThreshold/20 dB)).
+        // (mean * 10^(-OffThreshold/20 dB)). The scan runs on the lightly smoothed envelope,
+        // not the AM-depth window: a window longer than the key period rounds the edges away
+        // and the scan reads one burst where a keyed carrier has hundreds.
         double onMean = MeanOf(smoothed);
         double onEdge = onMean * Math.Pow(10.0, -OffThresholdDb / 40.0);
         double offEdge = onMean * Math.Pow(10.0, -OffThresholdDb / 20.0);
@@ -251,8 +339,13 @@ public static class FeatureExtractor
         double mean = MeanOf(values);
         double sigma = StandardDeviationOf(values, mean);
 
-        // Histogram of frequency, 128 bins across mean +/- 3 sigma (at least +/- 1 Hz).
-        double span = 3.0 * Math.Max(sigma, 1.0);
+        // Histogram of frequency, 128 bins across mean +/- 3 sigma. The span is floored at a
+        // tenth of the sample rate: a steady tone's discriminator noise has a tiny sigma, and a
+        // histogram zoomed onto it splits one tone into many clusters and reads phase noise as
+        // FSK tones. But when the signal's own swing is wider still (a 4.8 kBd FSK key, an FM
+        // tone), the span must follow the swing, or the outer tones fall into the edge bins and
+        // the clusters smear into one.
+        double span = 3.0 * Math.Max(sigma, Math.Max(1.0, Math.Min(sampleRateHz / 10.0, 2.0 * sigma)));
         double lo = mean - span;
         double hi = mean + span;
         const int Bins = 128;
@@ -264,8 +357,11 @@ public static class FeatureExtractor
             hist[b]++;
         }
 
-        // Count clusters: runs of occupied bins (>= 2 % of samples) separated by empty bins.
-        double occupancy = count * 0.02;
+        // Count clusters: runs of occupied bins (>= 1 % of samples) separated by empty bins.
+        // Two FSK tones at a sane modulation index split their energy across several bins each,
+        // and a 2 % floor leaves the outer bins of each tone below threshold so the runs merge
+        // into one cluster.
+        double occupancy = count * 0.01;
         var clusters = new List<(double Weight, double Centroid)>();
         double runWeight = 0;
         double runWeighted = 0;
@@ -464,16 +560,52 @@ public static class FeatureExtractor
             return 0;
         }
 
-        int gaps = crossings.Count / 2;
-        int[] medians = new int[gaps];
-        for (int i = 0; i < gaps; i++)
+        // Every second crossing is one symbol period later; the last usable pair sits two
+        // crossings from the end, so bound the gap count by the crossing list.
+        int gaps = (crossings.Count - 2) / 2;
+        if (gaps <= 0)
         {
-            medians[i] = crossings[(2 * i) + 2] - crossings[2 * i];
+            return 0;
         }
 
-        Array.Sort(medians);
-        double symbolSamples = medians[medians.Length / 2];
-        return symbolSamples <= 0 ? 0 : sampleRateHz / symbolSamples;
+        int[] pairs = new int[gaps];
+        for (int i = 0; i < gaps; i++)
+        {
+            pairs[i] = crossings[(2 * i) + 2] - crossings[2 * i];
+        }
+
+        Array.Sort(pairs);
+        double symbolSamples = pairs[pairs.Length / 2];
+        if (symbolSamples <= 0)
+        {
+            return 0;
+        }
+
+        // A steady tone's discriminator noise crosses the centre every sample or two, so the
+        // raw median gap reads as an absurd symbol rate. Keying transitions are separated by
+        // at least a symbol period, and no sane narrowband link keys faster than a few hundred
+        // kBd; reject an estimate that smells like noise ripple instead of keying.
+        double symbolRate = sampleRateHz / symbolSamples;
+        return symbolRate > 1_000_000 ? 0 : symbolRate;
+    }
+
+    /// <summary>Boxcar smoothing of a double array (same running-sum walk as the float pass).</summary>
+    private static double[] SmoothDouble(double[] values, int width)
+    {
+        double[] outValues = new double[values.Length];
+        double sum = 0;
+        for (int i = 0; i < values.Length; i++)
+        {
+            sum += values[i];
+            if (i >= width)
+            {
+                sum -= values[i - width];
+            }
+
+            outValues[i] = sum / Math.Min(i + 1, width);
+        }
+
+        return outValues;
     }
 
     private static float[] Boxcar(float[] values, int width)
