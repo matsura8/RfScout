@@ -1,4 +1,4 @@
-﻿using System.IO;
+using System.IO;
 using RfScout.Core.Spectrum;
 
 namespace RfScout.Core.Recording;
@@ -65,7 +65,16 @@ public sealed class FileRadioSource : IRadioSource
     /// <summary>The path being played.</summary>
     public string Path2 => _cs8Path;
 
-    public event EventHandler<SpectrumFrameEventArgs>? SpectrumAvailable;
+    /// <summary>
+    /// File playback replays IQ captures, never full-span spectra, so this source raises the
+    /// event only from <see cref="StartSweep"/>'s honest fallback path; the compiler still needs
+    /// a raise site for the interface member (CS0067), hence the no-op accessor below.
+    /// </summary>
+    public event EventHandler<SpectrumFrameEventArgs>? SpectrumAvailable
+    {
+        add { }
+        remove { }
+    }
 
     public event EventHandler<IqCaptureEventArgs>? CaptureAvailable;
 

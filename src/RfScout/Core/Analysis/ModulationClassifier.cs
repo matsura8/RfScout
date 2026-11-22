@@ -29,7 +29,7 @@ namespace RfScout.Core.Analysis;
 public sealed class ModulationClassifier
 {
     /// <summary>Classify one capture from its measured features.</summary>
-    public ClassificationResult Classify(SignalFeatures f)
+    public static ClassificationResult Classify(SignalFeatures f)
     {
         ArgumentNullException.ThrowIfNull(f);
 

@@ -1,4 +1,4 @@
-﻿using RfScout.Core.Dsp;
+using RfScout.Core.Dsp;
 
 namespace RfScout.Core.Analysis;
 

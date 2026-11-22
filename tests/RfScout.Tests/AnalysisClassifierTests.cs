@@ -1,4 +1,4 @@
-﻿using System.IO;
+using System.IO;
 using RfScout.Core;
 using RfScout.Core.Analysis;
 using RfScout.Core.Fakes;
@@ -143,12 +143,10 @@ internal static class SignalGenerator
 /// </summary>
 public sealed class AnalysisClassifierTests
 {
-    private static readonly ModulationClassifier Classifier = new();
-
     private static (SignalFeatures Features, ClassificationResult Result) Run(byte[] iq, int rateHz)
     {
         SignalFeatures f = FeatureExtractor.Extract(iq, rateHz);
-        return (f, Classifier.Classify(f));
+        return (f, ModulationClassifier.Classify(f));
     }
 
     private static void Dump(string name, SignalFeatures f, ClassificationResult r)

@@ -1,4 +1,4 @@
-﻿using RfScout.Core;
+using RfScout.Core;
 using RfScout.Core.Analysis;
 
 namespace RfScout.Core.Analysis;

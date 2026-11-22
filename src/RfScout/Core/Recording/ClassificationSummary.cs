@@ -1,4 +1,4 @@
-﻿namespace RfScout.Core.Recording;
+namespace RfScout.Core.Recording;
 
 /// <summary>
 /// The two public facts about a classification that belong in a .sigmf-meta annotation: the
