@@ -1,4 +1,4 @@
-﻿using RfScout.Core;
+using RfScout.Core;
 using RfScout.Core.Spectrum;
 using RfScout.Services.HackRf;
 

@@ -1,4 +1,4 @@
-﻿using System.Text;
+using System.Text;
 using System.IO;
 using RfScout.Core;
 using RfScout.Core.Spectrum;
@@ -146,4 +146,4 @@ public sealed class PeakPipelineHardwareTests
         return sorted[sorted.Length / 2];
     }
 
-    }
+}
