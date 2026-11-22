@@ -26,6 +26,7 @@ public sealed class PeakRow : INotifyPropertyChanged
     private DateTimeOffset _lastSeenUtc = DateTimeOffset.UnixEpoch;
     private string _bandwidthClass = string.Empty;
     private bool _isSelected;
+    private IReadOnlyList<RfScout.Core.Decoders.DeviceIdentification> _identifications = [];
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -143,6 +144,22 @@ public sealed class PeakRow : INotifyPropertyChanged
     {
         get => _bandwidthClass;
         set => SetField(ref _bandwidthClass, value);
+    }
+
+    /// <summary>M4: identifications (decodes or the classification label) from the last analyze of this peak, most confident first.</summary>
+    public IReadOnlyList<RfScout.Core.Decoders.DeviceIdentification> Identifications
+    {
+        get => _identifications;
+        set
+        {
+            if (ReferenceEquals(_identifications, value))
+            {
+                return;
+            }
+
+            _identifications = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Identifications)));
+        }
     }
 
     /// <summary>True when this row is the selected peak; drives the marker highlight.</summary>

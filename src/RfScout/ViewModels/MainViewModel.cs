@@ -9,6 +9,7 @@ using System.Windows.Input;
 using System.Threading.Tasks;
 using RfScout.Core;
 using RfScout.Core.Analysis;
+using RfScout.Core.Decoders;
 using RfScout.Core.Display;
 using RfScout.Core.Fakes;
 using RfScout.Core.Recording;
@@ -120,6 +121,9 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     private string _instFreqText = string.Empty;
     private SignalFeatures? _lastFeatures;
     private ClassificationResult? _lastClassification;
+    private int _lastAnalyzedPeakId = -1;
+    private IReadOnlyList<DeviceIdentification> _lastIdentifications = [];
+    private readonly DecoderPipeline _decoders = DecoderPipeline.Default();
 
     /// <summary>
     /// Capture limits an analyze must respect. Public so tests and the settings UI can read and
@@ -849,7 +853,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             {
                 return _selectedPeak is null
                     ? "No peak selected. Pick a row or click a marker."
-                    : _selectedPeak.AutomationName + ". Best guess: " + _selectedPeak.BestGuess + ".";
+                    : _selectedPeak.AutomationName + ". Best guess: " + _selectedPeak.BestGuess + "." + Environment.NewLine + IdentificationPaneText(_selectedPeak);
             }
         }
     }
@@ -1579,6 +1583,23 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             ClassificationResult result = ModulationClassifier.Classify(features);
             _lastFeatures = features;
             _lastClassification = result;
+            _lastAnalyzedPeakId = peak.Id;
+
+            // M4: run the band-plan decoders over the same capture (identifiers only, hard rule 3).
+            // The pipeline always returns at least the classification-only label, so the detail pane
+            // never goes blank after an analyze.
+            DecoderContext decodeCtx = DecoderContext.ForPeak(
+                capture.Samples,
+                capture.CenterHz,
+                capture.SampleRateHz,
+                _bandPlan ?? BandPlan.LoadShipped(),
+                result,
+                features);
+            IReadOnlyList<DeviceIdentification> identifications = _decoders.Identify(decodeCtx);
+            lock (_gate)
+            {
+                _lastIdentifications = identifications;
+            }
 
             PlotTrace zoom = CapturePlots.ZoomedSpectrum(capture.Samples, capture.SampleRateHz);
             PlotTrace envelope = CapturePlots.Envelope(capture.Samples, capture.SampleRateHz);
@@ -1610,6 +1631,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             ClassificationText = result.Describe();
             FeaturesText = features.Describe();
             ReasonsText = result.DescribeReasons();
+            DecodeLogText = string.Join(Environment.NewLine, identifications.Select(static id => id.Describe()));
             CapturePathText = capturePath;
             ZoomedSpectrumText = zoom.Describe();
             EnvelopeText = envelope.Describe();
@@ -1752,8 +1774,12 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
                 }
 
                 string band = _bandPlan?.BandName(track.CenterHz) ?? "unallocated";
-                string guess = BestGuessFor(track, band);
+                string guess = BestGuessFor(track, band, row);
                 double confidence = GuessConfidence(track, guess);
+                if (track.Id == _lastAnalyzedPeakId)
+                {
+                    row.Identifications = _lastIdentifications;
+                }
                 row.Apply(track, band, guess, confidence);
                 rows.Add(row);
             }
@@ -1837,8 +1863,20 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     /// M2's "best guess" is the band plan plus the measured shape: M3's classifier refines it.
     /// The band name is the honest answer for now, qualified by the bandwidth class.
     /// </summary>
-    private static string BestGuessFor(TrackedPeak track, string band)
+    private static string BestGuessFor(TrackedPeak track, string band, PeakRow? peak = null)
     {
+        // M4: when a decoder identified this peak, the most confident identification is the best guess.
+        if (peak is not null && peak.Identifications is { Count: > 0 } identIds)
+        {
+            foreach (DeviceIdentification ident in identIds)
+            {
+                if (ident.Protocol != DeviceIdentification.ProtocolClassification && ident.Protocol != PeakEnricher.ProtocolPeak)
+                {
+                    return ident.ShortText;
+                }
+            }
+        }
+
         string shape = track.BandwidthClass switch
         {
             PeakBandwidthClass.Narrow => "carrier",
@@ -1849,6 +1887,33 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 
         string activity = track.Activity.ToString().ToLowerInvariant();
         return string.Format(CultureInfo.InvariantCulture, "{0} ({1}, {2})", band, shape, activity);
+    }
+
+    /// <summary>
+    /// M4 detail-pane block: every identification from the last analyze, most confident first.
+    /// Empty when no analyze has run yet (the pane then keeps its M3 text).
+    /// </summary>
+    private string IdentificationPaneText(PeakRow? row)
+    {
+        IReadOnlyList<DeviceIdentification> ids;
+        lock (_gate)
+        {
+            ids = row is not null && row.Id == _lastAnalyzedPeakId ? _lastIdentifications : [];
+        }
+
+        if (ids.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("Identifications:");
+        foreach (DeviceIdentification id in ids)
+        {
+            sb.AppendLine("  " + id.Describe());
+        }
+
+        return sb.ToString();
     }
 
     /// <summary>Confidence the shape evidence carries: a known band plus a clear class is strong.</summary>
