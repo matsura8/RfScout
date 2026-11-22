@@ -1,0 +1,12 @@
+﻿<Project>
+  <ItemGroup>
+    <!--
+      The band plan is data, not code: Core/Spectrum/bandplan.json ships next to the assembly so
+      allocations can be edited and reviewed without recompiling, and so the test project reads
+      the same file the app does.
+    -->
+    <None Include="$(MSBuildThisFileDirectory)Core\Spectrum\bandplan.json"
+          Link="bandplan.json"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

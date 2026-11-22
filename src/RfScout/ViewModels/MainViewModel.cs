@@ -1,5 +1,8 @@
+﻿using System.Collections.Generic;
 using System.ComponentModel;
 using System.Globalization;
+using System.Diagnostics;
+using System.IO;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Windows.Input;
@@ -8,6 +11,7 @@ using RfScout.Core.Display;
 using RfScout.Core.Fakes;
 using RfScout.Core.Streaming;
 using RfScout.Core.Spectrum;
+using System.Windows.Threading;
 using RfScout.Services.HackRf;
 
 namespace RfScout.ViewModels;
@@ -45,8 +49,24 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 
     private readonly Lock _gate = new();
     private readonly SpectrumFrameBuffer _frames = new();
-    private readonly NoiseFloorEstimator _floor = new();
+    /// <summary>Floor line for the trace: the display estimator (min-hold, updates every refresh).
+    /// The peak detector's statistical floor is the Spectrum one, fed only by completed sweeps.</summary>
+    private readonly RfScout.Core.Display.NoiseFloorEstimator _floor = new();
     private readonly WaterfallModel _waterfall = new();
+    private readonly Core.Spectrum.NoiseFloorEstimator _peakFloor = new();
+    private PeakDetector _peakDetector = new();
+    private readonly PeakTracker _peakTracker = new();
+    private BandPlan? _bandPlan = TryLoadBandPlan();
+    private readonly List<PeakRow> _peakRows = [];
+    private PeakRow? _selectedPeak;
+    private double _peakThresholdDb = PeakDetector.DefaultThresholdDb;
+    private string _peakFilterText = string.Empty;
+    private List<PeakRow> _visiblePeakRows = [];
+    private string _peakSortColumn = "Power";
+    private bool _peakSortDescending = true;
+    private int _floorDirtyBins;
+    private long _lastPeakFloorTicks;
+    private long _lastPeakFloorSequence;
     private readonly DbRange _dbRange = new(DefaultDbMin, DefaultDbMax);
 
     private IRadioSource? _radio;
@@ -620,6 +640,256 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     /// <summary>Frames held for the display, with the peak-hold merge.</summary>
     public SpectrumFrameBuffer Frames => _frames;
 
+    /// <summary>Rows the peak table binds to: filtered and sorted view of every tracked peak.</summary>
+    public IReadOnlyList<PeakRow> PeakRows => _visiblePeakRows;
+
+    /// <summary>The selected peak, shared between the table row and the plot markers.</summary>
+    public PeakRow? SelectedPeak
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _selectedPeak;
+            }
+        }
+
+        set
+        {
+            PeakRow? previous;
+            lock (_gate)
+            {
+                if (ReferenceEquals(_selectedPeak, value))
+                {
+                    return;
+                }
+
+                previous = _selectedPeak;
+                _selectedPeak = value;
+            }
+
+            if (previous is not null)
+            {
+                previous.IsSelected = false;
+            }
+
+            if (value is not null)
+            {
+                value.IsSelected = true;
+            }
+
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(SelectedPeakText));
+            RaiseRedraw();
+        }
+    }
+
+    /// <summary>Detail-pane text for the selected peak, empty when none is selected.</summary>
+    public string SelectedPeakText
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _selectedPeak is null
+                    ? "No peak selected. Pick a row or click a marker."
+                    : _selectedPeak.AutomationName + ". Best guess: " + _selectedPeak.BestGuess + ".";
+            }
+        }
+    }
+
+    /// <summary>Detection threshold in dB above the noise floor; the toolbar slider binds here.</summary>
+    public double PeakThresholdDb
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _peakThresholdDb;
+            }
+        }
+
+        set
+        {
+            double clamped = Math.Clamp(value, 0, 60);
+            bool changed;
+            lock (_gate)
+            {
+                changed = clamped != _peakThresholdDb;
+                if (changed)
+                {
+                    _peakThresholdDb = clamped;
+                    _peakDetector = new PeakDetector(clamped);
+                }
+            }
+
+            if (changed)
+            {
+                OnPropertyChanged();
+                RebuildPeakRows();
+            }
+        }
+    }
+
+    /// <summary>Free-text filter for the peak table (matches frequency, band, type or guess).</summary>
+    public string PeakFilterText
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _peakFilterText;
+            }
+        }
+
+        set
+        {
+            bool changed;
+            lock (_gate)
+            {
+                changed = _peakFilterText != value;
+                if (changed)
+                {
+                    _peakFilterText = value;
+                }
+            }
+
+            if (changed)
+            {
+                OnPropertyChanged();
+                RebuildPeakRows();
+            }
+        }
+    }
+
+    /// <summary>Column the table sorts by ("Id", "Frequency", "Power", "Snr", "Bandwidth", "Duty", "Band", "LastSeen").</summary>
+    public string PeakSortColumn
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _peakSortColumn;
+            }
+        }
+
+        set
+        {
+            bool changed;
+            lock (_gate)
+            {
+                changed = _peakSortColumn != value;
+                if (changed)
+                {
+                    _peakSortColumn = value;
+                }
+            }
+
+            if (changed)
+            {
+                OnPropertyChanged();
+                RebuildPeakRows();
+            }
+        }
+    }
+
+    /// <summary>True when the sort runs high-to-low; the header toggles it.</summary>
+    public bool PeakSortDescending
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _peakSortDescending;
+            }
+        }
+
+        set
+        {
+            bool changed;
+            lock (_gate)
+            {
+                changed = _peakSortDescending != value;
+                if (changed)
+                {
+                    _peakSortDescending = value;
+                }
+            }
+
+            if (changed)
+            {
+                OnPropertyChanged();
+                RebuildPeakRows();
+            }
+        }
+    }
+
+    /// <summary>Sort a column and flip the direction when it is already the active one.</summary>
+    public void TogglePeakSort(string column)
+    {
+        lock (_gate)
+        {
+            if (string.Equals(_peakSortColumn, column, StringComparison.OrdinalIgnoreCase))
+            {
+                _peakSortDescending = !_peakSortDescending;
+            }
+            else
+            {
+                _peakSortColumn = column;
+                _peakSortDescending = true;
+            }
+        }
+
+        OnPropertyChanged(nameof(PeakSortColumn));
+        OnPropertyChanged(nameof(PeakSortDescending));
+        RebuildPeakRows();
+    }
+
+    /// <summary>Arrow keys in the peak table: move the selection by one row of the visible list.</summary>
+    public void MovePeakSelection(int delta)
+    {
+        List<PeakRow> rows = _visiblePeakRows;
+        if (rows.Count == 0)
+        {
+            return;
+        }
+
+        int index = -1;
+        lock (_gate)
+        {
+            if (_selectedPeak is not null)
+            {
+                index = rows.IndexOf(_selectedPeak);
+            }
+        }
+
+        int next = index < 0
+            ? (delta < 0 ? rows.Count - 1 : 0)
+            : Math.Clamp(index + delta, 0, rows.Count - 1);
+
+        SelectedPeak = rows[next];
+    }
+
+    /// <summary>Band plan the table consults; null only when the shipped file failed to load.</summary>
+    public BandPlan? BandPlan => _bandPlan;
+
+    /// <summary>
+    /// Marker list for the plots: one per visible tracked peak, with the selected one flagged.
+    /// Frequencies are absolute Hz; the control maps them through its own axes.
+    /// </summary>
+    public IReadOnlyList<RfScout.Core.Display.PeakMarker> PeekMarkers()
+    {
+        List<PeakRow> rows = _visiblePeakRows;
+        PeakRow? selected = SelectedPeak;
+        var markers = new List<RfScout.Core.Display.PeakMarker>(rows.Count);
+        foreach (PeakRow row in rows)
+        {
+            markers.Add(new RfScout.Core.Display.PeakMarker(row.Id, row.CenterHz, row.PowerDb, ReferenceEquals(row, selected)));
+        }
+
+        return markers;
+    }
+
     /// <summary>Build the plan the current settings describe, or null when they are not usable.</summary>
     public SweepPlan? CurrentPlan
     {
@@ -676,8 +946,11 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         {
             _radio = source;
             _isSweeping = true;
-            _frames.Reset();
+_frames.Reset();
             _floor.Reset();
+            _peakFloor.Reset();
+            _peakTracker.Reset();
+            ClearPeakRows();
             _waterfall.Clear();
             _customPreset = new SweepPreset(
                 "Custom",
@@ -826,13 +1099,15 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             return false;
         }
 
-        floorDb = _floor.Update(latest);
+floorDb = _floor.Update(latest);
 
         if (latest.BinCount > 0)
         {
             EnsureWaterfallColumns(latest.BinCount);
             _waterfall.WriteRow(latest.PowerDb, ColourRange);
         }
+
+        UpdatePeakPipeline(latest);
 
         lock (_gate)
         {
@@ -1008,6 +1283,203 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         }
     }
 
+    /// <summary>
+    /// Fold the newest frame into the M2 peak pipeline: the statistical floor takes only
+    /// completed sweeps (throttled so a 24000-bin percentile sort does not run sixty times a
+    /// second on a partial frame), the detector runs against that floor, and the tracker gives
+    /// the detections stable IDs. The table rows are then rebuilt from the tracker snapshot.
+    /// </summary>
+    private void UpdatePeakPipeline(SpectrumFrame frame)
+    {
+        if (!frame.SweepCompleted)
+        {
+            return;
+        }
+
+        long now = Stopwatch.GetTimestamp();
+        bool due = (now - _lastPeakFloorTicks) >= TimeSpan.TicksPerSecond;
+        if (!due && frame.BinCount != _floorDirtyBins)
+        {
+            // A completed sweep on a grid the floor already covers: fold it in silently so the
+            // percentile window keeps filling even inside the throttle window.
+            _peakFloor.Update(frame);
+            return;
+        }
+
+        if (!due && _lastPeakFloorSequence == Frames.Sequence)
+        {
+            return;
+        }
+
+        _lastPeakFloorTicks = now;
+        _lastPeakFloorSequence = Frames.Sequence;
+        _floorDirtyBins = frame.BinCount;
+
+        IReadOnlyList<double> floor = _peakFloor.Update(frame);
+        IReadOnlyList<DetectedPeak> detections = _peakDetector.Detect(frame, floor);
+        IReadOnlyList<TrackedPeak> tracks = _peakTracker.Update(detections, frame.BinWidthHz, frame.UtcTimestamp);
+
+        RebuildPeakRows(tracks);
+    }
+
+    /// <summary>Rebuild the visible row list from the tracker's current snapshot.</summary>
+    private void RebuildPeakRows(IReadOnlyList<TrackedPeak>? tracks = null)
+    {
+        tracks ??= _peakTracker.Snapshot();
+
+        var rows = new List<PeakRow>(tracks.Count);
+        lock (_gate)
+        {
+            var byId = new Dictionary<int, PeakRow>(_peakRows.Count);
+            foreach (PeakRow row in _peakRows)
+            {
+                byId[row.Id] = row;
+            }
+
+            foreach (TrackedPeak track in tracks)
+            {
+                if (!byId.TryGetValue(track.Id, out PeakRow? row))
+                {
+                    row = new PeakRow { Id = track.Id };
+                    _peakRows.Add(row);
+                    byId[track.Id] = row;
+                }
+
+                string band = _bandPlan?.BandName(track.CenterHz) ?? "unallocated";
+                string guess = BestGuessFor(track, band);
+                double confidence = GuessConfidence(track, guess);
+                row.Apply(track, band, guess, confidence);
+                rows.Add(row);
+            }
+
+            _peakRows.RemoveAll(row => !rows.Contains(row));
+            if (_selectedPeak is not null && !rows.Contains(_selectedPeak))
+            {
+                _selectedPeak.IsSelected = false;
+                _selectedPeak = null;
+            }
+        }
+
+        ApplyFilterAndSort(rows);
+    }
+
+    /// <summary>Drop every row (new sweep plan).</summary>
+    private void ClearPeakRows()
+    {
+        lock (_gate)
+        {
+            _peakRows.Clear();
+            _selectedPeak = null;
+        }
+
+        ApplyFilterAndSort(Array.Empty<PeakRow>());
+    }
+
+    /// <summary>Apply the filter text and sort order, then publish the visible list.</summary>
+    private void ApplyFilterAndSort(IReadOnlyList<PeakRow> rows)
+    {
+        string filter;
+        string column;
+        bool descending;
+        PeakRow? selected;
+        lock (_gate)
+        {
+            filter = _peakFilterText;
+            column = _peakSortColumn;
+            descending = _peakSortDescending;
+            selected = _selectedPeak;
+        }
+
+        IEnumerable<PeakRow> visible = rows;
+        if (!string.IsNullOrWhiteSpace(filter))
+        {
+            visible = rows.Where(row =>
+                row.FrequencyText.Contains(filter, StringComparison.OrdinalIgnoreCase)
+                || row.Band.Contains(filter, StringComparison.OrdinalIgnoreCase)
+                || row.Activity.Contains(filter, StringComparison.OrdinalIgnoreCase)
+                || row.BestGuess.Contains(filter, StringComparison.OrdinalIgnoreCase)
+                || row.Id.ToString(CultureInfo.InvariantCulture).Contains(filter, StringComparison.Ordinal));
+        }
+
+        List<PeakRow> sorted = visible.ToList();
+        int direction = descending ? -1 : 1;
+        sorted.Sort((a, b) =>
+        {
+            int result = column switch
+            {
+                "Id" => a.Id.CompareTo(b.Id),
+                "Frequency" => a.CenterHz.CompareTo(b.CenterHz),
+                "Snr" => a.SnrDb.CompareTo(b.SnrDb),
+                "Bandwidth" => a.BandwidthHz.CompareTo(b.BandwidthHz),
+                "Duty" => a.DutyCycle.CompareTo(b.DutyCycle),
+                "Band" => string.CompareOrdinal(a.Band, b.Band),
+                "Type" => string.CompareOrdinal(a.Activity, b.Activity),
+                "BestGuess" => string.CompareOrdinal(a.BestGuess, b.BestGuess),
+                "LastSeen" => a.LastSeenUtc.CompareTo(b.LastSeenUtc),
+                _ => a.PowerDb.CompareTo(b.PowerDb),
+            };
+            return result * direction;
+        });
+
+        _visiblePeakRows = sorted;
+        _ = selected;
+        OnPropertyChanged(nameof(PeakRows));
+        RaiseRedraw();
+    }
+
+    /// <summary>
+    /// M2's "best guess" is the band plan plus the measured shape: M3's classifier refines it.
+    /// The band name is the honest answer for now, qualified by the bandwidth class.
+    /// </summary>
+    private static string BestGuessFor(TrackedPeak track, string band)
+    {
+        string shape = track.BandwidthClass switch
+        {
+            PeakBandwidthClass.Narrow => "carrier",
+            PeakBandwidthClass.Medium => "channel",
+            PeakBandwidthClass.Wide => "wideband",
+            _ => "unknown width",
+        };
+
+        string activity = track.Activity.ToString().ToLowerInvariant();
+        return string.Format(CultureInfo.InvariantCulture, "{0} ({1}, {2})", band, shape, activity);
+    }
+
+    /// <summary>Confidence the shape evidence carries: a known band plus a clear class is strong.</summary>
+    private static double GuessConfidence(TrackedPeak track, string guess)
+    {
+        double score = 0.4;
+        if (!string.Equals(track.BandwidthClass.ToString(), "Unknown", StringComparison.Ordinal))
+        {
+            score += 0.2;
+        }
+
+        if (track.DutyCycle >= 0.5 || track.DutyCycle <= 0.3)
+        {
+            score += 0.1; // a consistent duty pattern is a real emitter, not a fluke
+        }
+
+        if (guess.Contains("unallocated", StringComparison.OrdinalIgnoreCase))
+        {
+            score -= 0.1;
+        }
+
+        return Math.Clamp(score, 0, 1);
+    }
+
+    /// <summary>Load the shipped band plan, or null (the table then says "unallocated").</summary>
+    private static BandPlan? TryLoadBandPlan()
+    {
+        try
+        {
+            return BandPlan.LoadShipped();
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
     private void PushGains()
     {
         IRadioSource? source;
@@ -1029,9 +1501,13 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         {
             source.SetGains(lna, vga);
 
-            // The floor line belongs to these gains, so an old gain's floor must not be drawn
-            // against the new trace.
+// The floor line belongs to these gains, so an old gain's floor must not be drawn
+            // against the new trace. The peak floor and tracker follow: their statistics are
+            // meaningless across a gain change.
             _floor.Reset();
+            _peakFloor.Reset();
+            _peakTracker.Reset();
+            ClearPeakRows();
         }
         catch (ArgumentOutOfRangeException)
         {

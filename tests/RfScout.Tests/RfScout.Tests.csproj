@@ -36,6 +36,7 @@
   <ItemGroup>
     <!-- Recorded IQ snippets (complex s8 + SigMF header) used as decoder fixtures. -->
     <None Include="fixtures\**\*" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\src\RfScout\Core\Spectrum\bandplan.json" Link="bandplan.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

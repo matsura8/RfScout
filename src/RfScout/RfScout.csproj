@@ -31,4 +31,6 @@
     <None Include="..\..\native\x64\*.dll" Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <Import Project="RfScout.targets" />
+
 </Project>
