@@ -225,64 +225,79 @@ public sealed class Rtl433Bridge : IDecoder
 
     private static DeviceIdentification? ParseOne(string line, long centerHz)
     {
-        using var doc = System.Text.Json.JsonDocument.Parse(line, new System.Text.Json.JsonDocumentOptions
+        System.Text.Json.JsonDocument doc;
+        try
         {
-            CommentHandling = System.Text.Json.JsonCommentHandling.Skip,
-            AllowTrailingCommas = true,
-            MaxDepth = 16,
-        });
-
-        if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Object)
+            // The binary is untrusted: a line that merely starts with '{' can still be
+            // truncated or malformed JSON, which JsonDocument reports by throwing. Skip the
+            // line rather than let the exception escape the parser.
+            doc = System.Text.Json.JsonDocument.Parse(line, new System.Text.Json.JsonDocumentOptions
+            {
+                CommentHandling = System.Text.Json.JsonCommentHandling.Skip,
+                AllowTrailingCommas = true,
+                MaxDepth = 16,
+            });
+        }
+        catch (System.Text.Json.JsonException)
         {
             return null;
         }
 
-        string? model = GetString(doc.RootElement, "model");
-        if (model is null)
+        using (doc)
         {
-            return null; // a time/frequency-only record, not a device report
-        }
 
-        string id = GetString(doc.RootElement, "id") ?? GetString(doc.RootElement, "protocol") ?? "unknown id";
-        string? channel = GetString(doc.RootElement, "channel");
-
-        var extra = new Dictionary<string, string>();
-        if (channel is not null)
-        {
-            extra["channel"] = channel;
-        }
-
-        foreach (System.Text.Json.JsonProperty prop in doc.RootElement.EnumerateObject())
-        {
-            if (extra.Count >= 12)
+            if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Object)
             {
-                break;
+                return null;
             }
 
-            if (prop.Name is "time" or "model" or "id" or "channel" or "freq" or "freq1" or "freq2")
+            string? model = GetString(doc.RootElement, "model");
+            if (model is null)
             {
-                continue;
+                return null; // a time/frequency-only record, not a device report
             }
 
-            if (prop.Value.ValueKind is System.Text.Json.JsonValueKind.String
-                or System.Text.Json.JsonValueKind.Number
-                or System.Text.Json.JsonValueKind.True
-                or System.Text.Json.JsonValueKind.False)
+            string id = GetString(doc.RootElement, "id") ?? GetString(doc.RootElement, "protocol") ?? "unknown id";
+            string? channel = GetString(doc.RootElement, "channel");
+
+            var extra = new Dictionary<string, string>();
+            if (channel is not null)
             {
-                extra[Cap(prop.Name, 32)] = Cap(prop.Value.ToString(), MaxFieldLength);
+                extra["channel"] = channel;
             }
+
+            foreach (System.Text.Json.JsonProperty prop in doc.RootElement.EnumerateObject())
+            {
+                if (extra.Count >= 12)
+                {
+                    break;
+                }
+
+                if (prop.Name is "time" or "model" or "id" or "channel" or "freq" or "freq1" or "freq2")
+                {
+                    continue;
+                }
+
+                if (prop.Value.ValueKind is System.Text.Json.JsonValueKind.String
+                    or System.Text.Json.JsonValueKind.Number
+                    or System.Text.Json.JsonValueKind.True
+                    or System.Text.Json.JsonValueKind.False)
+                {
+                    extra[Cap(prop.Name, 32)] = Cap(prop.Value.ToString(), MaxFieldLength);
+                }
+            }
+
+            extra["center_MHz"] = (centerHz / 1e6).ToString("F4", CultureInfo.InvariantCulture);
+            extra["decoded"] = "true";
+
+            return new DeviceIdentification(
+                "rtl_433",
+                Cap(model, MaxFieldLength),
+                Cap(id, MaxFieldLength),
+                extra,
+                0.85,
+                "rtl_433");
         }
-
-        extra["center_MHz"] = (centerHz / 1e6).ToString("F4", CultureInfo.InvariantCulture);
-        extra["decoded"] = "true";
-
-        return new DeviceIdentification(
-            "rtl_433",
-            Cap(model, MaxFieldLength),
-            Cap(id, MaxFieldLength),
-            extra,
-            0.85,
-            "rtl_433");
     }
 
     private static string? GetString(System.Text.Json.JsonElement root, string name)
