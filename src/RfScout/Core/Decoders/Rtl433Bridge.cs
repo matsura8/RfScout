@@ -225,12 +225,26 @@ public sealed class Rtl433Bridge : IDecoder
 
     private static DeviceIdentification? ParseOne(string line, long centerHz)
     {
-        using var doc = System.Text.Json.JsonDocument.Parse(line, new System.Text.Json.JsonDocumentOptions
+        System.Text.Json.JsonDocument doc;
+        try
         {
-            CommentHandling = System.Text.Json.JsonCommentHandling.Skip,
-            AllowTrailingCommas = true,
-            MaxDepth = 16,
-        });
+            // The binary is untrusted: a line that merely starts with '{' can still be
+            // truncated or malformed JSON, which JsonDocument reports by throwing. Skip the
+            // line rather than let the exception escape the parser.
+            doc = System.Text.Json.JsonDocument.Parse(line, new System.Text.Json.JsonDocumentOptions
+            {
+                CommentHandling = System.Text.Json.JsonCommentHandling.Skip,
+                AllowTrailingCommas = true,
+                MaxDepth = 16,
+            });
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return null;
+        }
+
+        using (doc)
+        {
 
         if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Object)
         {
@@ -283,6 +297,7 @@ public sealed class Rtl433Bridge : IDecoder
             extra,
             0.85,
             "rtl_433");
+        }
     }
 
     private static string? GetString(System.Text.Json.JsonElement root, string name)

@@ -95,7 +95,7 @@ public class ModeSDecoderTests
         return crc & 0xFFFFFF;
     }
 
-    [Fact(Skip = "ModeSFrameBuilder renders IQ at 8 Msps (pulse width needs >=4 samples/us) but DecoderContext is pinned to 2 Msps by Supports; frame scan finds 0 frames. Fix builder/decoder rate handling.")]
+    [Fact(Skip = "Rate fix attempted and reverted (20-call budget): at 2 Msps the builder's 0.5 us pulse is 1 sample and the decoder's percentile on-level clips it, so 0 frames; widening the pulse to 2 samples makes the envelope flat-topped and the rising-edge positions land on pulse starts, giving gaps of 3-4 samples where the 144-edge frame scan needs a clean 2/4 alternation. Needs a proper PPM resampler or a builder that renders edge-aligned pulses.")]
     public void FrameWithCallsignDecodesToIcaoAndCallsign()
     {
         // DF17, ICAO 407B0E, TC2 (callsign), AFTN "UAE101  " style: built by the builder, so
@@ -111,7 +111,7 @@ public class ModeSDecoderTests
         Assert.Equal("aircraft", id.DeviceType);
     }
 
-    [Fact(Skip = "Same as callsign test: builder upsamples to 8 Msps, Supports requires 2 Msps, so Decode returns empty (0 frames).")]
+    [Fact(Skip = "Same rate/edge-alignment blocker as the callsign test (see its Skip note).")]
     public void FrameWithAirbornePositionDecodesLatLon()
     {
         // DF17, ICAO A3B5C1, TC12 (airborne position, CPR even): lat/lon raw at bits 45..59 and
