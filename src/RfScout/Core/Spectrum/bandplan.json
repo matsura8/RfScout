@@ -55,7 +55,7 @@
       { "name": "GPS L2", "startHz": 1227600000, "stopHz": 1227600000, "modulations": ["BPSK", "CDMA"], "decoders": [] },
       { "name": "Inmarsat/GBAS aero", "startHz": 1084000000, "stopHz": 1086000000, "modulations": ["QPSK"], "decoders": [] },
       { "name": "Wi-Fi / Bluetooth 2.4 GHz", "startHz": 2400000000, "stopHz": 2500000000, "modulations": ["OFDM", "FHSS", "GFSK"], "decoders": [] },
-      { "name": "ISM 2.4 GHz (microwave, Zigbee)", "startHz": 2400000000, "stopHz": 2483500000, "modulations": ["OFDM", "DSSS", "FHSS"], "decoders": [] },
+      { "name": "ISM 2.4 GHz (microwave, Zigbee)", "startHz": 2400000000, "stopHz": 2483500000, "modulations": ["OFDM", "DSSS", "FHSS", "GFSK"], "decoders": [] },
       { "name": "C-band satellite downlink", "startHz": 3700000000, "stopHz": 4200000000, "modulations": ["QPSK", "OFDM"], "decoders": [] },
       { "name": "Wi-Fi 5 GHz (UNII-1/2/3)", "startHz": 5150000000, "stopHz": 5895000000, "modulations": ["OFDM"], "decoders": [] },
       { "name": "C-band satellite uplink", "startHz": 5925000000, "stopHz": 6425000000, "modulations": ["QPSK", "OFDM"], "decoders": [] },
