@@ -1,6 +1,7 @@
 <Window x:Class="RfScout.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ctl="clr-namespace:RfScout.Controls"
         xmlns:vm="clr-namespace:RfScout.ViewModels"
         Title="{Binding Title}" Width="640" Height="400" MinWidth="360" MinHeight="240"
         WindowStartupLocation="CenterScreen">
@@ -8,6 +9,10 @@
     <vm:MainViewModel />
   </Window.DataContext>
   <Grid Margin="24">
+    <Grid.ColumnDefinitions>
+      <ColumnDefinition Width="*" />
+      <ColumnDefinition Width="Auto" />
+    </Grid.ColumnDefinitions>
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto" />
       <RowDefinition Height="*" />
@@ -16,5 +21,16 @@
     <TextBlock Grid.Row="1" Margin="0,16,0,0" FontSize="14" TextWrapping="Wrap"
                Text="{Binding StatusText}" AutomationProperties.Name="Status"
                AutomationProperties.LiveSetting="Polite" />
+
+    <ContentControl x:Name="WaterfallHost" Grid.Row="1" Grid.Column="1" Width="260" Margin="16,16,0,0"
+                    AutomationProperties.Name="Waterfall plot"
+                    AutomationProperties.HelpText="Scrolling waterfall of recent sweeps">
+      <ctl:SpectrumGrid x:Name="Waterfall" ProbeRequested="OnWaterfallProbe" />
+    </ContentControl>
   </Grid>
 </Window>
+
+
+
+
+

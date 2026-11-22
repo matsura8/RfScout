@@ -338,6 +338,8 @@ public sealed class SyntheticRadioSource : IRadioSource
     public void SimulateDeviceLost() =>
         Stopped?.Invoke(this, new RadioStoppedEventArgs("Synthetic source stopped.", deviceLost: true));
 
+    public void StopStream() => Exit();
+
     public void Dispose() => Exit();
 
     private void Enter()

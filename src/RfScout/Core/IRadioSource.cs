@@ -52,6 +52,13 @@ public interface IRadioSource : IDisposable
 
     /// <summary>Switch antenna (bias-tee) power on or off. Off by default; the UI confirms first.</summary>
     void SetAntennaPower(bool enabled);
+
+    /// <summary>
+    /// Stop the running sweep or capture without releasing the device, so the next
+    /// <see cref="StartSweep"/> or <see cref="StartCapture"/> can begin on the same open handle.
+    /// Idempotent: stopping an already-stopped source does nothing.
+    /// </summary>
+    void StopStream();
 }
 
 /// <summary>Carries one <see cref="Core.SpectrumFrame"/>.</summary>

@@ -19,3 +19,6 @@ obj/
 # (the built DLLs in native\x64 are committed on purpose)
 /native/src/
 
+# dev audit: gitleaks exclusions for the vendored native source tree (see .gitleaksignore,
+# which is gitignored because its fingerprints point at paths under native/src).
+.gitleaksignore
