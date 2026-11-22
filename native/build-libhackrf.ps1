@@ -3,7 +3,7 @@
   Build hackrf.dll (libhackrf) + the HackRF command line tools for x64 Windows.
 
 .DESCRIPTION
-  Repeatable build of the RX side of libhackrf on Apache:
+  Repeatable build of the RX side of libhackrf:
 
     1. clone greatscottgadgets/hackrf at a pinned tag (sparse: host/ only)
     2. get libusb-1.0 and pthreads from vcpkg (x64-windows) - libhackrf needs both:
@@ -14,10 +14,10 @@
        pthread*.dll and the tool executables into native\x64
     5. print each copied DLL's product version and SHA-256 (native\README.md records them)
 
-  Nothing here needs admin rights, and nothing touches drivers: the HackRF is already
-  bound to WinUSB (check with `dev usb`).
+  Nothing here needs admin rights, and nothing touches drivers: the HackRF must already
+  be bound to WinUSB (see native\README.md).
 
-  Usage (from the repo root, as maxpowerit\dev):
+  Usage (from the repo root, as a normal user):
     pwsh -NoProfile -File native\build-libhackrf.ps1
     pwsh -NoProfile -File native\build-libhackrf.ps1 -Clean
     pwsh -NoProfile -File native\build-libhackrf.ps1 -RunHackrfInfo
@@ -68,11 +68,11 @@ function Get-ArtifactInfo([string]$path) {
 
 function Assert-Tool([string]$name) {
     if (-not (Get-Command $name -ErrorAction Ignore)) {
-        throw "$name is not on PATH. Run C:\workspace\devflow\bin\dev.cmd doctor to see what is missing."
+        throw "$name is not on PATH. Install it first (see the requirements in native\README.md)."
     }
 }
 
-# CMake on this machine finds clang first (LLVM is on PATH), and libhackrf is built with
+# CMake finds clang first when LLVM is on PATH, and libhackrf is built with
 # MSVC, so put the VS 2022 Build Tools x64 environment on PATH before configuring.
 function Enter-MsvcX64 {
     $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'

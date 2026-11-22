@@ -10,7 +10,8 @@ pwsh -NoProfile -File native\build-libhackrf.ps1 -RunHackrfInfo   # ... and prov
 
 The script clones the source and vcpkg under `native\src\` (gitignored) and needs git, cmake,
 ninja and the VS 2022 Build Tools C++ workload. It does not need admin rights and does not
-touch drivers — the HackRF is already bound to **WinUSB** (`dev usb` shows `WINUSB`).
+touch drivers — the HackRF must already be bound to **WinUSB** (installed by the HackRF Windows
+drivers or by Zadig).
 
 ## What is in x64
 
@@ -54,14 +55,14 @@ library version `0.9.2`, which `hackrf_info.exe` prints above and
 
 ## hackrf_info.exe output (proof the device answers)
 
-Run on Apache as `maxpowerit\dev`, HackRF One plugged in and bound to WinUSB, 2026-11-21:
+Run on the development PC (Windows 11, standard user), HackRF One plugged in and bound to WinUSB, 2026-11-21:
 
 ```
 hackrf_info version: git-1cfe7df
 libhackrf version: git-1cfe7df (0.9.2)
 Found HackRF
 Index: 0
-Serial number: 0000000000000000088869dc382c711b
+Serial number: 0000000000000000xxxxxxxxxxxxxxxx
 Board ID Number: 2 (HackRF One)
 Firmware Version: v2.3.1 (API:1.08)
 Part ID Number: 0xa000cb3c 0x0066435c
@@ -74,8 +75,8 @@ You may have problems at high sample rates.
 ```
 
 Firmware API 1.08 is above the 1.02 minimum RX sweep mode needs. The "8 other devices on the
-same bus" line is real — the built-in hub also feeds the card reader, smart-card reader,
-Bluetooth and the MSI receiver — so if a sweep ever drops blocks at 20 Msps, check bus sharing
+same bus" line is real — on the development laptop the built-in hub also feeds several
+internal devices — so if a sweep ever drops blocks at 20 Msps, check bus sharing
 before blaming the code. The status bar counts dropped blocks for exactly that reason.
 
 ## Notes
@@ -85,5 +86,3 @@ before blaming the code. The status bar counts dropped blocks for exactly that r
   `Core/Spectrum/SweepFrameAssembler` implements.
 - Nothing here links a TX entry point; `NativeMethodsTests` fails the build test if a TX
   function ever appears in the wrapper.
-- The 32-bit `hackrf.dll` under `D:\Downloads\sdrsharp-x86` and the 2022 clone under
-  `D:\github\hackrf` are **not** used by RfScout.

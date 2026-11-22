@@ -32,8 +32,23 @@ public sealed record SweepPlan(
     /// <summary>Bin width the sweep will really have.</summary>
     public double ResolvedBinWidthHz => Spectrum.SweepMath.BinWidthHz(FftLength);
 
-    /// <summary>Bin width the display grid will have (wider for very wide spans).</summary>
-    public double DisplayBinWidthHz => Math.Max(ResolvedBinWidthHz, Spectrum.SpectrumGrid.BinWidthFor(Ranges, ResolvedBinWidthHz));
+    /// <summary>
+    /// Bin width the display grid will have.
+    ///
+    /// Two things can widen it past <see cref="BinWidthHz"/>. A very wide span is one: 6 GHz at
+    /// 100 kHz would be 60000 bins and 240 MB of float per frame, so
+    /// <see cref="Spectrum.SpectrumGrid.BinWidthFor"/> keeps the frame to a size the UI can copy
+    /// sixty times a second. The radio's own resolution is the other, and it is the one that
+    /// matters: the hardware can only produce bins of <see cref="ResolvedBinWidthHz"/>, so a grid
+    /// finer than that would have gaps between the block bins rather than measurements in every
+    /// bin - the display would show holes, the peak detector would report a sawtooth noise floor,
+    /// and a sweep would never report itself complete because the uncovered bins never fill. The
+    /// grid therefore never goes below the resolution the radio actually delivers, and the number
+    /// in the toolbar is the number on the axis.
+    /// </summary>
+    public double DisplayBinWidthHz => Math.Max(
+        ResolvedBinWidthHz,
+        Math.Max(BinWidthHz, Spectrum.SpectrumGrid.BinWidthFor(Ranges, ResolvedBinWidthHz)));
 
     public bool IsValid =>
         Ranges is { Count: > 0 } &&
@@ -96,6 +111,14 @@ public sealed class SpectrumFrame
     /// <summary>How many bins hold a measurement.</summary>
     public required int FilledBins { get; init; }
 
+    /// <summary>
+    /// True when this frame closes a complete pass over the span: every bin was measured since the
+    /// grid was last cleared. The status bar counts sweeps per second from these frames, and the
+    /// noise-floor estimator only takes statistics from complete passes, so a wide span that takes
+    /// longer than the refresh interval still yields honest numbers.
+    /// </summary>
+    public bool SweepCompleted { get; init; }
+
     public required DateTimeOffset UtcTimestamp { get; init; }
 
     public int BinCount => PowerDb.Length;
@@ -148,6 +171,7 @@ public sealed class SpectrumFrame
             PowerDb = merged,
             FilledBins = filled,
             UtcTimestamp = UtcTimestamp,
+            SweepCompleted = SweepCompleted || previous.SweepCompleted,
         };
     }
 }

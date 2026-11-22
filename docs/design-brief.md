@@ -1,7 +1,7 @@
 # Design brief: RfScout
 
 ## Problem
-An operator with a HackRF One plugged into Apache wants to answer, in one window and without
+An operator with a HackRF One plugged into a Windows PC wants to answer, in one window and without
 any other SDR software: *what is transmitting on this antenna right now, where exactly, how
 strong is it, and what kind of device is it?* SDR# shows a tuner; `hackrf_sweep` shows a
 sweep but no analysis. RfScout sweeps the whole 1 MHz–6 GHz range, finds the signals worth
@@ -70,7 +70,7 @@ cannot be read, not because a policy forbids reading it. RfScout never decrypts 
 transmits. The README and About box state this.
 
 ## Open questions
-- Antenna connected to Apache is a short whip: weak below 30 MHz. Live identification tests
+- The development antenna is a short whip: weak below 30 MHz. Live identification tests
   log what they see rather than failing on an empty sky.
 - rtl_433 is an external process; if it is absent the ISM path degrades to pulse-timing
   classification only.

@@ -6,7 +6,7 @@ namespace RfScout.Core;
 
 /// <summary>
 /// Hardware-free checks behind <c>RfScout.exe --self-test</c>, the smoke run that
-/// <c>dev test</c>, CI and the Windows Sandbox round all use. Everything here must pass with no
+/// the test suite and CI run. Everything here must pass with no
 /// HackRF attached, no drivers, no files and no network: it checks the maths and the framing,
 /// not the radio.
 /// </summary>

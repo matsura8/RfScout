@@ -24,4 +24,4 @@ body:
     attributes: { label: Environment, description: "Windows version, display scaling (100/150/200%), theme (light/dark/high contrast), sandbox or real PC" }
   - type: textarea
     id: attachments
-    attributes: { label: Screenshots / dumps / logs, description: "Crash dumps are in C:\\results\\dumps (sandbox) or the folder `dev dumps -Enable` set." }
+    attributes: { label: Screenshots / dumps / logs, description: "Screenshots, logs or crash dumps (.dmp) help a lot." }

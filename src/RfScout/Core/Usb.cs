@@ -33,7 +33,7 @@ public static partial class Usb
             : null;
     }
 
-    /// <summary>Parses the DEVFLOW_USB_DEVICES format: "name=vid:pid;name2=vid:pid". Bad items are skipped.</summary>
+    /// <summary>Parses the HARDWARE_USB_DEVICES format: "name=vid:pid;name2=vid:pid". Bad items are skipped.</summary>
     public static IReadOnlyList<(string Name, UsbDeviceId Id)> ParseDeviceList(string? text) =>
         (text ?? string.Empty)
             .Split(';', StringSplitOptions.RemoveEmptyEntries)

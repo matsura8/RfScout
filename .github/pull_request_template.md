@@ -1,8 +1,10 @@
 ## What and why
 
 ## Checks
-- [ ] `dev lint` and `dev test` pass locally
-- [ ] New logic has unit tests
-- [ ] Security-relevant? (input parsing, files/registry, network, process launch, crypto) → `dev audit -Quick` passes and docs/threat-model.md updated
-- [ ] UI change? → UI review checklist (devflow docs/checklists/ui-review.md): 100/150/200% scaling, light/dark/high contrast, keyboard only, Narrator, Accessibility Insights FastPass
+- [ ] `dotnet format --verify-no-changes` and `dotnet build -c Release -warnaserror` are clean
+- [ ] `dotnet test --filter-not-trait Category=Hardware` passes (and the hardware tests, if the change touches the radio)
+- [ ] New logic in `Core` has unit tests
+- [ ] Still receive-only: no transmit call added, antenna power and amp still default off
+- [ ] Security-relevant? (parsing untrusted data, files, network, process launch) -> docs/threat-model.md updated
+- [ ] UI change? Checked at 100/150/200% scaling, light/dark/high contrast, keyboard only and with Narrator
 - [ ] CHANGELOG.md updated under [Unreleased]

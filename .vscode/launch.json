@@ -7,7 +7,7 @@
       "request": "launch",
       "program": "${workspaceFolder}/out/artifacts/bin/RfScout/debug/RfScout.exe",
       "cwd": "${workspaceFolder}",
-      "preLaunchTask": "dev build",
+      "preLaunchTask": "build",
       "justMyCode": true
     },
     { "name": ".NET: Attach", "type": "coreclr", "request": "attach" }

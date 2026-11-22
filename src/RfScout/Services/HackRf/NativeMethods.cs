@@ -36,6 +36,9 @@ internal static partial class NativeMethods
     /// <summary>Most start/stop MHz pairs one sweep may request.</summary>
     public const int MaxSweepRanges = 10;
 
+    /// <summary><c>HACKRF_TRUE</c>: what <c>hackrf_is_streaming</c> returns while a stream runs.</summary>
+    public const int HackrfTrue = 1;
+
     /// <summary>libhackrf's <c>HACKRF_SUCCESS</c>.</summary>
     public const int Success = 0;
 
@@ -72,16 +75,16 @@ internal static partial class NativeMethods
     internal static partial int hackrf_exit();
 
     /// <summary>libhackrf version, e.g. "0.9.2". Owned by the library, so copy it before using.</summary>
-    [LibraryImport(LibraryName, EntryPoint = "hackrf_library_version", StringMarshalling = StringMarshalling.Utf8)]
+    [LibraryImport(LibraryName, EntryPoint = "hackrf_library_version")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
-    internal static partial string? hackrf_library_version();
+    internal static partial IntPtr hackrf_library_version();
 
     /// <summary>libhackrf release string, e.g. "git-1cfe7df". Owned by the library.</summary>
-    [LibraryImport(LibraryName, EntryPoint = "hackrf_library_release", StringMarshalling = StringMarshalling.Utf8)]
+    [LibraryImport(LibraryName, EntryPoint = "hackrf_library_release")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
-    internal static partial string? hackrf_library_release();
+    internal static partial IntPtr hackrf_library_release();
 
     /// <summary>Enumerate connected HackRFs. Free the result with <see cref="hackrf_device_list_free"/>.</summary>
     [LibraryImport(LibraryName, EntryPoint = "hackrf_device_list")]
@@ -255,10 +258,10 @@ internal static partial class NativeMethods
     internal static unsafe partial int hackrf_board_id_read(IntPtr device, byte* value);
 
     /// <summary>Board id as text, owned by the library.</summary>
-    [LibraryImport(LibraryName, EntryPoint = "hackrf_board_id_name", StringMarshalling = StringMarshalling.Utf8)]
+    [LibraryImport(LibraryName, EntryPoint = "hackrf_board_id_name")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
-    internal static partial string? hackrf_board_id_name(int boardId);
+    internal static partial IntPtr hackrf_board_id_name(int boardId);
 
     /// <summary>
     /// Read the firmware version into a caller-owned buffer. The library writes at most
@@ -277,10 +280,10 @@ internal static partial class NativeMethods
     internal static unsafe partial int hackrf_usb_api_version_read(IntPtr device, ushort* version);
 
     /// <summary>libhackrf's own text for an error code, owned by the library.</summary>
-    [LibraryImport(LibraryName, EntryPoint = "hackrf_error_name", StringMarshalling = StringMarshalling.Utf8)]
+    [LibraryImport(LibraryName, EntryPoint = "hackrf_error_name")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
-    internal static partial string? hackrf_error_name(int errorCode);
+    internal static partial IntPtr hackrf_error_name(int errorCode);
 
     /// <summary>
     /// Mirror of <c>struct hackrf_device_list</c> from hackrf.h, whose fields are documented
@@ -337,6 +340,19 @@ internal static partial class NativeMethods
         }
     }
 
+    /// <summary>
+    /// Copy a string libhackrf returns from static storage (library version and release, board
+    /// name, error name). These are declared as <see cref="IntPtr"/> rather than <c>string</c> on
+    /// purpose: the generated UTF-8 marshaller frees a returned string with
+    /// <c>Marshal.FreeCoTaskMem</c>, and freeing libhackrf's static text corrupts the heap.
+    /// </summary>
+    internal static string? LibraryOwnedString(IntPtr text) =>
+        text == IntPtr.Zero ? null : Marshal.PtrToStringUTF8(text);
+
+    /// <summary>libhackrf's own name for an error code, e.g. <c>HACKRF_ERROR_NOT_FOUND</c>.</summary>
+    internal static string ErrorName(int errorCode) =>
+        LibraryOwnedString(hackrf_error_name(errorCode)) ?? "unknown error";
+
     /// <summary>Read a device list header into its managed mirror.</summary>
     internal static HackrfDeviceList ReadDeviceList(IntPtr list) =>
         list == IntPtr.Zero ? default : Marshal.PtrToStructure<HackrfDeviceList>(list);
@@ -353,7 +369,7 @@ internal static partial class NativeMethods
             return;
         }
 
-        string name = hackrf_error_name(result) ?? "unknown error";
+        string name = ErrorName(result);
         throw new HackRfException(action, result, name);
     }
 }

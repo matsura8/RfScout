@@ -1,7 +1,7 @@
 {
   "version": "2.0.0",
   "tasks": [
-    { "label": "dev build", "type": "shell", "command": "pwsh -NoProfile -File dev.ps1 build", "group": { "kind": "build", "isDefault": true }, "problemMatcher": "$msCompile" },
-    { "label": "dev test", "type": "shell", "command": "pwsh -NoProfile -File dev.ps1 test", "group": "test" }
+    { "label": "build", "type": "shell", "command": "dotnet build -c Debug", "group": { "kind": "build", "isDefault": true }, "problemMatcher": "$msCompile" },
+    { "label": "test", "type": "shell", "command": "dotnet test --filter-not-trait Category=Hardware", "group": "test" }
   ]
 }

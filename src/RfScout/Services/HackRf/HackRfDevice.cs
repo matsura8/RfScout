@@ -20,6 +20,8 @@ namespace RfScout.Services.HackRf;
 ///    copies bytes into <see cref="ByteRingBuffer"/> and returns - no parsing, no allocation, no
 ///    UI call - so the transfer queue never starves.
 ///  * one worker thread drains the ring, frames sweep blocks, runs the FFT and publishes frames.
+///    It also stops a finished capture: hackrf_stop_rx must never run inside the callback,
+///    because libhackrf holds its transfer lock there and stop_rx waits on that same lock.
 ///  * frames reach the UI on the worker thread; the view model marshals them onto the dispatcher.
 ///    Nothing in this class references WPF.
 ///
@@ -34,6 +36,21 @@ public sealed unsafe class HackRfDevice : IRadioSource
 
     /// <summary>Highest sample rate the radio produces, and the rate sweep mode always uses.</summary>
     public const int MaxSampleRateHz = SweepMath.SampleRateHz;
+
+    /// <summary>Largest capture held in memory: 256 MiB, about 6.7 s at 20 Msps.</summary>
+    public const int MaxCaptureBytes = 1 << 28;
+
+    /// <summary>After starting a stream, wait this long before trusting <c>hackrf_is_streaming</c>.</summary>
+    private const long StreamGraceMs = 750;
+
+    /// <summary>How often an idle DSP worker asks libhackrf whether the stream is still alive.</summary>
+    private const long StreamCheckIntervalMs = 250;
+
+    /// <summary>How many times to look for the radio before reporting it missing, and how long
+    /// to wait between looks. Together about a second and a half, which is how long a HackRF
+    /// takes to come back after closing a stream.</summary>
+    private const int MaxOpenAttempts = 6;
+    private const int OpenRetryPauseMs = 250;
 
     private const long ModeIdle = 0;
     private const long ModeSweep = 1;
@@ -54,6 +71,14 @@ public sealed unsafe class HackRfDevice : IRadioSource
     private readonly CancellationTokenSource _cancel = new();
     private readonly ManualResetEventSlim _idle = new(true);
     private readonly Lock _gate = new();
+
+    // Held by the DSP worker around each read-and-process step, and by ResetStreamState, so a
+    // reset never lands in the middle of a ring read or a parser feed.
+    private readonly Lock _drainGate = new();
+
+    // Serialises stopping, which the API caller, the DSP worker (finished capture, lost stream)
+    // and Dispose can all do.
+    private readonly Lock _streamGate = new();
 
     private SpectrumAssembler? _assembler;
     private CaptureWindow? _capture;
@@ -77,6 +102,13 @@ public sealed unsafe class HackRfDevice : IRadioSource
     // 16-byte struct field would be a torn read on x86.
     private long _lastSweepUtcTicks = DateTimeOffset.UtcNow.UtcTicks;
     private bool _disposed;
+    private int _captureDone;
+    private int _streamLive;
+    private long _streamStartedMs;
+    private long _lastStreamCheckMs;
+
+    /// <summary>The GCHandle pinning this instance for the running stream, or IntPtr.Zero.</summary>
+    private IntPtr _streamContext;
 
     /// <summary>
     /// Open the first HackRF present, or a specific one by serial. Reads the board id, firmware
@@ -99,46 +131,44 @@ public sealed unsafe class HackRfDevice : IRadioSource
         try
         {
             string wanted = (serialNumber ?? string.Empty).Trim();
+
+            // A radio that was streaming a moment ago can take a few hundred milliseconds to come
+            // back: closing a stream resets the USB side of the firmware, and a freshly
+            // initialised libusb enumerates the bus before the device has re-appeared. That is not
+            // a missing radio, and calling it one is how stop-then-start or unplug-then-replug
+            // fails in front of the user, so look for it several times over about a second and a
+            // half before giving up. The last attempt's error is the one reported.
             string serial = wanted;
             string boardFromList = string.Empty;
+            (string Serial, string Board, bool SharesBus, HackRfHandle Handle) opened = default;
+            HackRfException? lastError = null;
 
-            IntPtr list = NativeMethods.hackrf_device_list();
-            try
+            for (int attempt = 0; ; attempt++)
             {
-                NativeMethods.HackrfDeviceList devices = NativeMethods.ReadDeviceList(list);
-                if (devices.DeviceCount > 0)
+                bool more = true;
+                try
                 {
-                    int index = 0;
-                    if (wanted.Length > 0)
-                    {
-                        for (int i = 0; i < devices.DeviceCount; i++)
-                        {
-                            if (string.Equals(devices.SerialNumber(i), wanted, StringComparison.OrdinalIgnoreCase))
-                            {
-                                index = i;
-                                break;
-                            }
-                        }
-                    }
+                    opened = TryOpen(wanted);
+                    break;
+                }
+                catch (HackRfException ex) when (ex.DeviceMissing)
+                {
+                    lastError = ex;
+                    more = attempt < MaxOpenAttempts - 1;
+                }
 
-                    serial = devices.SerialNumber(index);
-                    boardFromList = BoardNameFor(devices.UsbBoardId(index));
-                    BusSharesUsb = NativeMethods.hackrf_device_list_bus_sharing(list, index) == 1;
-                }
-            }
-            finally
-            {
-                if (list != IntPtr.Zero)
+                if (!more)
                 {
-                    NativeMethods.hackrf_device_list_free(list);
+                    throw lastError!;
                 }
+
+                Thread.Sleep(OpenRetryPauseMs);
             }
 
-            int openResult = wanted.Length == 0
-                ? NativeMethods.hackrf_open(out IntPtr raw)
-                : NativeMethods.hackrf_open_by_serial(wanted, out raw);
-            NativeMethods.ThrowForError(openResult, "hackrf_open");
-            handle = new HackRfHandle(raw);
+            serial = opened.Serial;
+            boardFromList = opened.Board;
+            BusSharesUsb = opened.SharesBus;
+            handle = opened.Handle;
             _handle = handle;
 
             DeviceInfo = ReadDeviceInfo(boardFromList, serial);
@@ -169,6 +199,60 @@ public sealed unsafe class HackRfDevice : IRadioSource
         }
     }
 
+    /// <summary>
+    /// One look for the radio: enumerate, pick the serial (or the first HackRF), open it, and
+    /// report what the list said. Throws <see cref="HackRfException"/> when it is not there, which
+    /// the constructor retries.
+    /// </summary>
+    private static (string Serial, string Board, bool SharesBus, HackRfHandle Handle) TryOpen(string wanted)
+    {
+        string serial = wanted;
+        string board = string.Empty;
+        bool sharesBus;
+
+        IntPtr list = NativeMethods.hackrf_device_list();
+        try
+        {
+            NativeMethods.HackrfDeviceList devices = NativeMethods.ReadDeviceList(list);
+            if (devices.DeviceCount == 0)
+            {
+                // An empty list is how libhackrf reports "no HackRF on the bus", which is exactly
+                // what the open would fail with anyway. Say it here, where the list count is known.
+                throw new HackRfException("hackrf_open", NativeMethods.ErrorNotFound, "HackRF not found");
+            }
+
+            int index = 0;
+            if (wanted.Length > 0)
+            {
+                for (int i = 0; i < devices.DeviceCount; i++)
+                {
+                    if (string.Equals(devices.SerialNumber(i), wanted, StringComparison.OrdinalIgnoreCase))
+                    {
+                        index = i;
+                        break;
+                    }
+                }
+            }
+
+            serial = devices.SerialNumber(index);
+            board = BoardNameFor(devices.UsbBoardId(index));
+            sharesBus = NativeMethods.hackrf_device_list_bus_sharing(list, index) == 1;
+        }
+        finally
+        {
+            if (list != IntPtr.Zero)
+            {
+                NativeMethods.hackrf_device_list_free(list);
+            }
+        }
+
+        int result = wanted.Length == 0
+            ? NativeMethods.hackrf_open(out IntPtr raw)
+            : NativeMethods.hackrf_open_by_serial(wanted, out raw);
+        NativeMethods.ThrowForError(result, "hackrf_open");
+        return (serial, board, sharesBus, new HackRfHandle(raw));
+    }
+
     public event EventHandler<SpectrumFrameEventArgs>? SpectrumAvailable;
 
     public event EventHandler<IqCaptureEventArgs>? CaptureAvailable;
@@ -181,9 +265,9 @@ public sealed unsafe class HackRfDevice : IRadioSource
     RadioDeviceInfo? IRadioSource.DeviceInfo => DeviceInfo;
 
     /// <summary>
-    /// True when the HackRF shares its USB hub with other devices. Apache's built-in hub also
-    /// feeds the card reader, smart-card reader, Bluetooth and the MSI receiver, and that is the
-    /// usual cause of dropped blocks at 20 Msps - worth knowing before blaming the code.
+    /// True when the HackRF shares its USB hub with other devices. Laptop hubs often also feed
+    /// card readers, Bluetooth and other internal devices, and that is the usual cause of
+    /// dropped blocks at 20 Msps - worth knowing before blaming the code.
     /// </summary>
     public bool BusSharesUsb { get; private set; }
 
@@ -253,11 +337,15 @@ public sealed unsafe class HackRfDevice : IRadioSource
         EnterMode(ModeSweep);
         try
         {
-            SpectrumAssembler assembler = new(
-                plan.Ranges[0].StartHz,
-                plan.Ranges[^1].StopHz,
-                plan.FftLength,
-                plan.DisplayBinWidthHz);
+            long startHz = long.MaxValue;
+            long stopHz = 0;
+            foreach (FrequencyRange range in plan.Ranges)
+            {
+                startHz = Math.Min(startHz, range.StartHz);
+                stopHz = Math.Max(stopHz, range.StopHz);
+            }
+
+            SpectrumAssembler assembler = new(startHz, stopHz, plan.FftLength, plan.DisplayBinWidthHz);
 
             lock (_gate)
             {
@@ -267,8 +355,12 @@ public sealed unsafe class HackRfDevice : IRadioSource
             }
 
             Volatile.Write(ref _sampleRateHz, SweepMath.SampleRateHz);
-            Interlocked.Exchange(ref _tunedHz, plan.Ranges[0].StartHz);
+            Interlocked.Exchange(ref _tunedHz, startHz);
             _idle.Reset();
+
+            // The plan records the gains and RF switches the sweep was made with, so the radio
+            // must actually be set to them, not left on whatever an earlier call configured.
+            ApplyRadioSettings(plan.LnaGainDb, plan.VgaGainDb, plan.RfAmpEnabled, plan.AntennaPower);
 
             NativeMethods.ThrowForError(
                 NativeMethods.hackrf_set_sample_rate(_handle.DangerousGetHandle(), SweepMath.SampleRateHz),
@@ -310,6 +402,14 @@ public sealed unsafe class HackRfDevice : IRadioSource
         if (duration <= TimeSpan.Zero || duration.TotalSeconds > 30)
         {
             throw new ArgumentOutOfRangeException(nameof(duration), duration, "A capture must be between 0 and 30 seconds.");
+        }
+
+        if (Math.Ceiling(duration.TotalSeconds * sampleRateHz) * 2 > MaxCaptureBytes)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(duration),
+                duration,
+                $"At {sampleRateHz / 1e6:0.###} Msps a capture can be at most {MaxCaptureSeconds(sampleRateHz):0.##} s ({MaxCaptureBytes >> 20} MiB).");
         }
 
         EnterMode(ModeCapture);
@@ -361,17 +461,44 @@ public sealed unsafe class HackRfDevice : IRadioSource
     /// </summary>
     public IqCapture? WaitForCapture(TimeSpan timeout) => _idle.Wait(timeout) ? CurrentCapture : null;
 
+    /// <summary>Longest capture <see cref="StartCapture"/> accepts at a given rate.</summary>
+    public static double MaxCaptureSeconds(int sampleRateHz) => MaxCaptureBytes / 2.0 / sampleRateHz;
+
     /// <summary>Stop the running stream without closing the device.</summary>
     public void StopStream()
     {
-        if (_disposed || _handle.IsClosed)
+        if (_disposed)
         {
             return;
         }
 
-        _ = NativeMethods.hackrf_stop_rx(_handle.DangerousGetHandle());
-        UnmapStream();
-        Interlocked.Exchange(ref _mode, ModeIdle);
+        StopStreamCore();
+    }
+
+    /// <summary>
+    /// Stop the native stream, release the callback registration and go idle. Runs during
+    /// <see cref="Dispose"/> too (after the disposed flag is set), so a disposed device never
+    /// leaves its GCHandle and buffers in <see cref="Streams"/>. Never call it from
+    /// <see cref="OnSampleBlock"/>.
+    /// </summary>
+    private void StopStreamCore()
+    {
+        lock (_streamGate)
+        {
+            // Stop the native stream once: a finished capture is stopped by the worker, and
+            // calling hackrf_stop_rx again on a stopped stream (from Dispose) is not safe.
+            // The registration below is released either way.
+            if (Interlocked.Read(ref _mode) != ModeIdle && !_handle.IsClosed)
+            {
+                _ = NativeMethods.hackrf_stop_rx(_handle.DangerousGetHandle());
+            }
+
+            Volatile.Write(ref _streamLive, 0);
+            UnmapStream();
+            Interlocked.Exchange(ref _mode, ModeIdle);
+            Volatile.Write(ref _captureDone, 0);
+        }
+
         _idle.Set();
     }
 
@@ -472,7 +599,7 @@ public sealed unsafe class HackRfDevice : IRadioSource
 
         try
         {
-            StopStream();
+            StopStreamCore();
         }
         catch (HackRfException ex)
         {
@@ -543,9 +670,10 @@ public sealed unsafe class HackRfDevice : IRadioSource
 
             if (window is not null && window.Write(bytes))
             {
-                StopStream();
-                _idle.Set();
-                CaptureAvailable?.Invoke(this, new IqCaptureEventArgs(window.Completed!));
+                // Only flag it: this runs inside libhackrf's transfer callback with its transfer
+                // lock held, and hackrf_stop_rx waits on that lock. The DSP worker stops the
+                // stream and raises CaptureAvailable.
+                Volatile.Write(ref _captureDone, 1);
             }
 
             return;
@@ -562,42 +690,126 @@ public sealed unsafe class HackRfDevice : IRadioSource
 
         while (!_cancel.IsCancellationRequested)
         {
-            int read = _ring.Read(buffer);
+            if (Interlocked.Exchange(ref _captureDone, 0) == 1)
+            {
+                FinishCapture();
+                continue;
+            }
+
+            int read;
+            SpectrumFrame? frame = null;
+            lock (_drainGate)
+            {
+                read = _ring.Read(buffer);
+                if (read > 0)
+                {
+                    frame = ProcessChunk(buffer.AsSpan(0, read));
+                }
+            }
+
+            // Raised outside the drain gate, so a handler that starts a new sweep can reset
+            // the stream state without waiting on this thread.
+            if (frame is not null)
+            {
+                SpectrumAvailable?.Invoke(this, new SpectrumFrameEventArgs(frame));
+            }
+
             if (read == 0)
             {
+                CheckNativeStream();
                 Thread.Sleep(2);
-                continue;
             }
-
-            SpectrumAssembler? assembler;
-            lock (_gate)
-            {
-                assembler = _assembler;
-            }
-
-            if (assembler is null)
-            {
-                continue; // capture mode: the callback fills the window directly
-            }
-
-            _parser.Feed(buffer.AsSpan(0, read), block =>
-            {
-                assembler.AddBlock(block, block.IqSamples.Span);
-                Interlocked.Increment(ref _blocks);
-            });
-
-            DateTimeOffset now = DateTimeOffset.UtcNow;
-            if (!assembler.IsDue(now))
-            {
-                continue;
-            }
-
-            SpectrumFrame frame = assembler.Publish(now);
-            Interlocked.Increment(ref _sweeps);
-            Interlocked.Exchange(ref _lastSweepUtcTicks, now.UtcTicks);
-            UpdateRates(now);
-            SpectrumAvailable?.Invoke(this, new SpectrumFrameEventArgs(frame));
         }
+    }
+
+    /// <summary>Frame and transform one chunk of sweep bytes; returns a frame when one is due.</summary>
+    private SpectrumFrame? ProcessChunk(ReadOnlySpan<byte> chunk)
+    {
+        SpectrumAssembler? assembler;
+        lock (_gate)
+        {
+            assembler = _assembler;
+        }
+
+        if (assembler is null)
+        {
+            return null; // capture mode: the callback fills the window directly
+        }
+
+        _parser.Feed(chunk, block =>
+        {
+            assembler.AddBlock(block, block.IqSamples.Span);
+            Interlocked.Increment(ref _blocks);
+        });
+
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        if (!assembler.IsDue(now))
+        {
+            return null;
+        }
+
+        SpectrumFrame frame = assembler.Publish(now);
+
+        // The status bar promises sweeps per second, so only a frame that closed a pass counts.
+        // The watchdog timestamp and the sample rate still move on every frame, because those
+        // measure liveness of the stream, not the completion of a sweep.
+        if (frame.SweepCompleted)
+        {
+            Interlocked.Increment(ref _sweeps);
+        }
+
+        Interlocked.Exchange(ref _lastSweepUtcTicks, now.UtcTicks);
+        UpdateRates(now);
+        return frame;
+    }
+
+    /// <summary>A capture window filled up in the callback: stop the stream here, off the libhackrf thread.</summary>
+    private void FinishCapture()
+    {
+        IqCapture? done;
+        lock (_gate)
+        {
+            done = _capture?.Completed;
+        }
+
+        StopStreamCore();
+        if (done is not null)
+        {
+            CaptureAvailable?.Invoke(this, new IqCaptureEventArgs(done));
+        }
+    }
+
+    /// <summary>
+    /// libhackrf ends a stream without calling the RX callback when a transfer fails, which is
+    /// what an unplugged radio looks like. Poll <c>hackrf_is_streaming</c> while no data arrives
+    /// and go idle with <see cref="Stopped"/> (device lost) instead of waiting forever.
+    /// </summary>
+    private void CheckNativeStream()
+    {
+        // Only a stream libhackrf has actually started can be lost; between EnterMode and a
+        // successful start the library rightly says it is not streaming yet.
+        if (Volatile.Read(ref _streamLive) == 0 || _handle.IsClosed || Volatile.Read(ref _captureDone) == 1)
+        {
+            return;
+        }
+
+        long now = Environment.TickCount64;
+        if (now - Interlocked.Read(ref _streamStartedMs) < StreamGraceMs || now - _lastStreamCheckMs < StreamCheckIntervalMs)
+        {
+            return;
+        }
+
+        _lastStreamCheckMs = now;
+        int state = NativeMethods.hackrf_is_streaming(_handle.DangerousGetHandle());
+        if (state == NativeMethods.HackrfTrue || Interlocked.Read(ref _mode) == ModeIdle || Volatile.Read(ref _captureDone) == 1)
+        {
+            return;
+        }
+
+        StopStreamCore();
+        Stopped?.Invoke(
+            this,
+            new RadioStoppedEventArgs($"The radio stopped streaming ({NativeMethods.ErrorName(state)}); it may have been unplugged.", deviceLost: true));
     }
 
     /// <summary>
@@ -632,27 +844,28 @@ public sealed unsafe class HackRfDevice : IRadioSource
     }
 
     /// <summary>
-    /// Program the firmware sweep list. <c>hackrf_init_sweep</c> wants a packed uint16 array of
-    /// MHz start/stop pairs and counts ranges, not entries. The step width is 10 MHz (half the
-    /// sample rate, i.e. <c>TUNE_STEP</c> in <c>hackrf_sweep.c</c>); with the interleaved style
-    /// the firmware then alternates sub-steps of 7.5 MHz and 2.5 MHz, so block headers advance by
-    /// 250 kHz and the two kept quarters tile the span, which is what
-    /// <see cref="SweepMath"/> assumes when it stitches them.
+    /// Program the firmware sweep list. <c>hackrf_init_sweep</c> wants a packed uint16 array of MHz
+    /// start/stop pairs and counts ranges, not entries.
+    ///
+    /// The step width is the sample rate in Hz - 20 MHz at 20 Msps - which is what
+    /// <c>hackrf_sweep.c</c> programs (<c>TUNE_STEP</c> is the sample rate in MHz and it passes
+    /// <c>TUNE_STEP * FREQ_ONE_MHZ</c>). With the interleaved style the firmware then alternates
+    /// sub-steps of a quarter and three quarters of that, so consecutive block headers advance by
+    /// 5 MHz and then 15 MHz: each block's two kept bands fill the 5 MHz the block before it left
+    /// out, the pair advances 20 MHz and measures exactly 20 MHz, with no gap and no double
+    /// counting.
+    ///
+    /// Half that step width - 10 MHz, which looks just as reasonable because it is the width of the
+    /// two kept bands - puts the headers 2.5 and 7.5 MHz apart, and a pair then covers only
+    /// 17.5 MHz of the 20 MHz it advances: a 1.25 MHz hole every 5 MHz of span, which on a 625 kHz
+    /// display grid is three empty bins in ten right across the range. The spectrum then looks like
+    /// a busy band with a comb through it, and the sweep never reports itself complete because those
+    /// bins never fill. This is the one number in the device layer that has to match upstream.
     /// </summary>
     private void ProgramSweep(SweepPlan plan)
     {
-        IReadOnlyList<(int StartMHz, int StopMHz)> ranges = SweepMath.BuildSweepRanges(plan.Ranges[0]);
-        if (ranges.Count is 0 or > NativeMethods.MaxSweepRanges)
-        {
-            throw new ArgumentException($"Sweep plan produced {ranges.Count} radio ranges.", nameof(plan));
-        }
-
-        ushort[] pairs = new ushort[ranges.Count * 2];
-        for (int i = 0; i < ranges.Count; i++)
-        {
-            pairs[(2 * i)] = (ushort)ranges[i].StartMHz;
-            pairs[(2 * i) + 1] = (ushort)ranges[i].StopMHz;
-        }
+        ushort[] pairs = BuildSweepPairs(plan);
+        int rangeCount = pairs.Length / 2;
 
         fixed (ushort* pinned = pairs)
         {
@@ -660,13 +873,43 @@ public sealed unsafe class HackRfDevice : IRadioSource
                 NativeMethods.hackrf_init_sweep(
                     _handle.DangerousGetHandle(),
                     pinned,
-                    ranges.Count,
+                    rangeCount,
                     NativeMethods.BytesPerBlock,
-                    (uint)(SweepMath.SampleRateHz / 2),
+                    (uint)SweepMath.SampleRateHz,
                     (uint)SweepMath.SweepOffsetHz,
                     NativeMethods.SweepStyleInterleaved),
                 "hackrf_init_sweep");
         }
+    }
+
+    /// <summary>
+    /// The packed MHz start/stop pairs for every range of <paramref name="plan"/>, in order. A plan
+    /// that needs more ranges than the firmware holds is rejected rather than silently cut short.
+    /// </summary>
+    internal static ushort[] BuildSweepPairs(SweepPlan plan)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        var ranges = new List<(int StartMHz, int StopMHz)>();
+        foreach (FrequencyRange range in plan.Ranges)
+        {
+            ranges.AddRange(SweepMath.BuildSweepRanges(range));
+        }
+
+        if (ranges.Count is 0 or > NativeMethods.MaxSweepRanges)
+        {
+            throw new ArgumentException(
+                $"Sweep plan needs {ranges.Count} radio ranges; the firmware holds 1 to {NativeMethods.MaxSweepRanges}.",
+                nameof(plan));
+        }
+
+        ushort[] pairs = new ushort[ranges.Count * 2];
+        for (int i = 0; i < ranges.Count; i++)
+        {
+            pairs[2 * i] = (ushort)ranges[i].StartMHz;
+            pairs[(2 * i) + 1] = (ushort)ranges[i].StopMHz;
+        }
+
+        return pairs;
     }
 
     /// <summary>
@@ -679,6 +922,7 @@ public sealed unsafe class HackRfDevice : IRadioSource
         GCHandle box = GCHandle.Alloc(this, GCHandleType.Normal);
         IntPtr context = GCHandle.ToIntPtr(box);
         IntPtr handle = _handle.DangerousGetHandle();
+        Volatile.Write(ref _streamContext, context);
         Streams[context] = this;
         Streams[handle] = this;
 
@@ -691,47 +935,61 @@ public sealed unsafe class HackRfDevice : IRadioSource
             UnmapStream();
             NativeMethods.ThrowForError(result, sweepMode ? "hackrf_start_rx_sweep" : "hackrf_start_rx");
         }
+
+        Interlocked.Exchange(ref _streamStartedMs, Environment.TickCount64);
+        Volatile.Write(ref _streamLive, 1);
     }
 
+    /// <summary>
+    /// Detach from the static stream table and release the pin. Only the pointer recorded in
+    /// <see cref="_streamContext"/> is ever treated as a GCHandle: the device pointer libhackrf
+    /// also uses as a key is raw native memory, and GCHandle.FromIntPtr on it yields a handle
+    /// whose Free corrupts the pinning heap - which is how a hardware run died with a
+    /// fail-fast instead of a test failure.
+    /// </summary>
     private void UnmapStream()
     {
         Streams.TryRemove(_handle.DangerousGetHandle(), out _);
-        foreach (IntPtr key in Streams.Keys)
+
+        IntPtr context = Interlocked.Exchange(ref _streamContext, IntPtr.Zero);
+        if (context != IntPtr.Zero)
         {
-            if (Streams.TryGetValue(key, out HackRfDevice? owner) && ReferenceEquals(owner, this))
-            {
-                Streams.TryRemove(key, out _);
-                if (key != IntPtr.Zero)
-                {
-                    try
-                    {
-                        GCHandle box = GCHandle.FromIntPtr(key);
-                        if (box.IsAllocated)
-                        {
-                            box.Free();
-                        }
-                    }
-                    catch (InvalidOperationException)
-                    {
-                        // Not a GCHandle we allocated; nothing to free.
-                    }
-                }
-            }
+            Streams.TryRemove(context, out _);
+            GCHandle.FromIntPtr(context).Free();
         }
     }
 
     private void ResetStreamState()
     {
-        _parser.Reset();
-        _ring.Reset();
-        Interlocked.Exchange(ref _blocks, 0);
-        Interlocked.Exchange(ref _sweeps, 0);
-        Interlocked.Exchange(ref _samples, 0);
-        _rateWindowStartMs = 0;
-        _rateWindowSweeps = 0;
-        _rateWindowSamples = 0;
-        Volatile.Write(ref _sweepsPerSecond, 0);
-        Volatile.Write(ref _samplesPerSecond, 0);
+        // The DSP worker keeps running between streams; hold its gate so the ring and parser are
+        // never reset in the middle of a read or a feed.
+        lock (_drainGate)
+        {
+            _parser.Reset();
+            _ring.Reset();
+            Volatile.Write(ref _captureDone, 0);
+            Interlocked.Exchange(ref _blocks, 0);
+            Interlocked.Exchange(ref _sweeps, 0);
+            Interlocked.Exchange(ref _samples, 0);
+            _rateWindowStartMs = 0;
+            _rateWindowSweeps = 0;
+            _rateWindowSamples = 0;
+            Volatile.Write(ref _sweepsPerSecond, 0);
+            Volatile.Write(ref _samplesPerSecond, 0);
+        }
+    }
+
+    /// <summary>Set gains and the RF amp / antenna power together and remember them.</summary>
+    private void ApplyRadioSettings(int lnaDb, int vgaDb, bool ampOn, bool antennaPower)
+    {
+        lock (_gate)
+        {
+            _lnaDb = lnaDb;
+            _vgaDb = vgaDb;
+            _ampOn = ampOn;
+            _antennaPowerOn = antennaPower;
+            ConfigureGains();
+        }
     }
 
     private void ConfigureGains()
@@ -739,8 +997,10 @@ public sealed unsafe class HackRfDevice : IRadioSource
         IntPtr handle = _handle.DangerousGetHandle();
         NativeMethods.ThrowForError(NativeMethods.hackrf_set_lna_gain(handle, (uint)_lnaDb), "hackrf_set_lna_gain");
         NativeMethods.ThrowForError(NativeMethods.hackrf_set_vga_gain(handle, (uint)_vgaDb), "hackrf_set_vga_gain");
-        _ = NativeMethods.hackrf_set_amp_enable(handle, (byte)(_ampOn ? 1 : 0));
-        _ = NativeMethods.hackrf_set_antenna_enable(handle, (byte)(_antennaPowerOn ? 1 : 0));
+        NativeMethods.ThrowForError(NativeMethods.hackrf_set_amp_enable(handle, (byte)(_ampOn ? 1 : 0)), "hackrf_set_amp_enable");
+        NativeMethods.ThrowForError(
+            NativeMethods.hackrf_set_antenna_enable(handle, (byte)(_antennaPowerOn ? 1 : 0)),
+            "hackrf_set_antenna_enable");
     }
 
     private RadioDeviceInfo ReadDeviceInfo(string boardFromList, string serial)
@@ -750,7 +1010,7 @@ public sealed unsafe class HackRfDevice : IRadioSource
         byte boardId = 0;
         _ = NativeMethods.hackrf_board_id_read(handle, &boardId);
         string boardName =
-            NativeMethods.hackrf_board_id_name(boardId) is { Length: > 0 } named ? named :
+            NativeMethods.LibraryOwnedString(NativeMethods.hackrf_board_id_name(boardId)) is { Length: > 0 } named ? named :
             boardFromList.Length > 0 ? boardFromList : "HackRF";
 
         byte* version = stackalloc byte[NativeMethods.VersionStringLength + 1];
@@ -765,7 +1025,7 @@ public sealed unsafe class HackRfDevice : IRadioSource
             BoardName: boardName,
             FirmwareVersion: firmware.Length > 0 ? firmware : "unknown",
             UsbApiVersion: api,
-            LibraryVersion: NativeMethods.hackrf_library_version() ?? "unknown");
+            LibraryVersion: NativeMethods.LibraryOwnedString(NativeMethods.hackrf_library_version()) ?? "unknown");
     }
 
     private static string ParseAscii(ReadOnlySpan<byte> bytes)
@@ -849,7 +1109,8 @@ public sealed unsafe class HackRfDevice : IRadioSource
             bool antennaPower)
         {
             MaxSamples = maxSamples;
-            _bytes = new byte[Math.Clamp(maxSamples * 2, 2, 1 << 28)];
+            // StartCapture has already rejected anything over MaxCaptureBytes, so this never truncates.
+            _bytes = new byte[Math.Max(2, maxSamples * 2)];
             _centerHz = centerHz;
             _sampleRateHz = sampleRateHz;
             _lnaDb = lnaDb;

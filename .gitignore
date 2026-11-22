@@ -1,7 +1,5 @@
-# DevFlow outputs
+# Build output (out\artifacts, test results)
 /out/
-# Rust
-/target/
 # .NET
 bin/
 obj/
@@ -21,5 +19,3 @@ obj/
 # (the built DLLs in native\x64 are committed on purpose)
 /native/src/
 
-# agent/editor backups
-*.strata-backup-*
