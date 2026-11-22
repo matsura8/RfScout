@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Globalization;
 using System.Diagnostics;
@@ -946,7 +946,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         {
             _radio = source;
             _isSweeping = true;
-_frames.Reset();
+            _frames.Reset();
             _floor.Reset();
             _peakFloor.Reset();
             _peakTracker.Reset();
@@ -1099,7 +1099,7 @@ _frames.Reset();
             return false;
         }
 
-floorDb = _floor.Update(latest);
+        floorDb = _floor.Update(latest);
 
         if (latest.BinCount > 0)
         {
@@ -1501,7 +1501,7 @@ floorDb = _floor.Update(latest);
         {
             source.SetGains(lna, vga);
 
-// The floor line belongs to these gains, so an old gain's floor must not be drawn
+            // The floor line belongs to these gains, so an old gain's floor must not be drawn
             // against the new trace. The peak floor and tracker follow: their statistics are
             // meaningless across a gain change.
             _floor.Reset();

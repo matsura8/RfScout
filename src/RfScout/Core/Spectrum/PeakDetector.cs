@@ -1,4 +1,4 @@
-﻿using System.Globalization;
+using System.Globalization;
 
 namespace RfScout.Core.Spectrum;
 
@@ -226,13 +226,13 @@ public sealed class PeakDetector
         double h10 = EdgeWidth(frame, peakBin, runStart, runEnd, peakDb - 10.0, binWidth);
 
         // The run itself is the honest width floor: a real signal is at least as wide as the
-            // bins that cleared the threshold, even when its skirt drops fast (a steep-sided
-            // wide signal measures a narrow -3 dB width but is obviously not a carrier).
-            // The run itself is the honest width floor: a real signal is at least as wide as the
-            // bins that cleared the threshold, even when its skirt drops fast (a steep-sided
-            // wide signal measures a narrow -3 dB width but is obviously not a carrier). The
-            // -3 dB measure only counts when it is wider than the run.
-            double widthBins = h3 / binWidth;
+        // bins that cleared the threshold, even when its skirt drops fast (a steep-sided
+        // wide signal measures a narrow -3 dB width but is obviously not a carrier).
+        // The run itself is the honest width floor: a real signal is at least as wide as the
+        // bins that cleared the threshold, even when its skirt drops fast (a steep-sided
+        // wide signal measures a narrow -3 dB width but is obviously not a carrier). The
+        // -3 dB measure only counts when it is wider than the run.
+        double widthBins = h3 / binWidth;
         PeakBandwidthClass kind = widthBins switch
         {
             < 1.5 => PeakBandwidthClass.Unknown,
@@ -253,18 +253,18 @@ public sealed class PeakDetector
     private static double EdgeWidth(SpectrumFrame frame, int peakBin, int runStart, int runEnd, double dropDb, double binWidth)
     {
         // The walk is bounded by the run, but a flat-topped signal's skirt can still be
-            // above the drop level at the run's own edge (the threshold run ends before the
-            // skirt does, because those skirt bins sit below the floor threshold). Extend the
-            // walk one bin past each edge; bins outside the run are still real measurements.
-            int leftLimit = Math.Max(0, runStart - 1);
-            int rightLimit = Math.Min(frame.BinCount - 1, runEnd + 1);
-            double left = CrossingHz(frame, peakBin, leftLimit, dropDb, step: -1, binWidth);
-            double right = CrossingHz(frame, peakBin, rightLimit, dropDb, step: +1, binWidth);
+        // above the drop level at the run's own edge (the threshold run ends before the
+        // skirt does, because those skirt bins sit below the floor threshold). Extend the
+        // walk one bin past each edge; bins outside the run are still real measurements.
+        int leftLimit = Math.Max(0, runStart - 1);
+        int rightLimit = Math.Min(frame.BinCount - 1, runEnd + 1);
+        double left = CrossingHz(frame, peakBin, leftLimit, dropDb, step: -1, binWidth);
+        double right = CrossingHz(frame, peakBin, rightLimit, dropDb, step: +1, binWidth);
 
-            // The run itself is the honest floor for the width: a signal is at least as wide
-            // as the bins that cleared the threshold, even when its skirt drops fast.
-            double runSpan = ((runEnd - runStart) + 1) * binWidth;
-            return Math.Max(runSpan, right - left);
+        // The run itself is the honest floor for the width: a signal is at least as wide
+        // as the bins that cleared the threshold, even when its skirt drops fast.
+        double runSpan = ((runEnd - runStart) + 1) * binWidth;
+        return Math.Max(runSpan, right - left);
     }
 
     /// <summary>

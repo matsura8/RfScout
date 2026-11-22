@@ -1,4 +1,4 @@
-﻿using RfScout.Core;
+using RfScout.Core;
 using RfScout.Core.Spectrum;
 
 namespace RfScout.Tests;
@@ -51,7 +51,7 @@ public sealed class PeakDetectionTests
         float[] flat = Enumerable.Repeat(-60f, 8).ToArray();
 
         IReadOnlyList<double> floor = estimator.Update(Frame(flat, completed: false));
-        Assert.Empty(floor.Where(v => !double.IsNaN(v)));
+        Assert.DoesNotContain(floor, v => !double.IsNaN(v));
         Assert.Equal(0, estimator.Sweeps);
     }
 

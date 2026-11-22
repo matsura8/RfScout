@@ -1,4 +1,4 @@
-﻿using RfScout.Core.Spectrum;
+using RfScout.Core.Spectrum;
 
 namespace RfScout.Tests;
 

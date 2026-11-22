@@ -1,4 +1,4 @@
-﻿namespace RfScout.Core.Display;
+namespace RfScout.Core.Display;
 
 /// <summary>
 /// A peak marker the spectrum and waterfall plots draw: where the peak sits, how strong it is,

@@ -1,4 +1,4 @@
-﻿// SpectrumGrid.cs - WPF control hosting the SkiaSharp waterfall (M1).
+// SpectrumGrid.cs - WPF control hosting the SkiaSharp waterfall (M1).
 using System;
 using System.Globalization;
 using System.Windows;
