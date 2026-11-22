@@ -102,10 +102,13 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     // The analyze state machine (one-at-a-time rule, plan bounds) lives in AnalyzeController;
     // these fields hold the results the detail pane binds to and the analyze's own settings.
     private readonly AnalyzeController _analyze = new();
-    private readonly CaptureRecorder _recorder = new();
+    private CaptureRecorder _recorder = new();
     private bool _autoAnalyze;
     private int _analyzeRoundRobinIndex;
     private bool _autoAnalyzeTickActive;
+    // The peak whose analyze runs from inside the sweep's own completion callback, so the sweep
+    // keeps the radio and the analyze borrows it instead of opening a second source.
+    private PeakRow? _analyzeSourceMarker;
     private string _analyzeStatus = "Idle. Select a peak and press Enter (or click Analyze peak) to analyze it.";
     private string _classificationText = string.Empty;
     private string _featuresText = string.Empty;
@@ -137,6 +140,13 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     /// recorder's %LOCALAPPDATA%\RfScout\captures; a test points it at a throwaway folder.
     /// </summary>
     public string? CaptureDirectoryOverride { get; set; }
+
+    /// <summary>
+    /// Test seam: given the plan's sample rate, produce the IQ bytes the analyze should classify
+    /// instead of the fake source's generic tone. Lets a headless test drive the whole analyze
+    /// path over a known waveform (see the M3 analyze tests).
+    /// </summary>
+    public Func<int, byte[]>? CaptureOverrideForTests { get; set; }
 
     private TaskCompletionSource<IqCapture>? _captureTcs;
     private string? _captureDirOverrideApplied;
@@ -1432,9 +1442,14 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     /// never own the radio together: <see cref="AnalyzeController"/> enforces one analyze at a
     /// time, and the sweep is stopped before the capture starts and restarted afterwards.
     /// </summary>
-    public async Task AnalyzeSelectedPeakAsync()
+    public Task AnalyzeSelectedPeakAsync() => AnalyzePeakAsync(SelectedPeak);
+
+    /// <summary>
+    /// Analyze one peak row. Split out from <see cref="AnalyzeSelectedPeakAsync"/> so auto-analyze
+    /// can pass the row its tick picked instead of re-reading the selection.
+    /// </summary>
+    public async Task AnalyzePeakAsync(PeakRow? peak)
     {
-        PeakRow? peak = SelectedPeak;
         if (peak is null)
         {
             AnalyzeStatus = "Nothing to analyze: select a peak first.";
@@ -1456,7 +1471,14 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         {
             AnalyzeStatus = $"Analyzing peak {peak.Id} at {peak.FrequencyText}: pausing the sweep.";
             OnPropertyChanged(nameof(IsAnalyzing));
-            if (wasSweeping)
+
+            // Release the radio before the analyze opens it: the sweep and the analyze never own
+            // it together. When the analyze runs from a sweep callback (auto-analyze after a
+            // completed sweep), the source is still inside its own StartSweep call on this thread,
+            // so Stop() would hit the "already running" guard; in that case the sweep is left
+            // running and the finally block below stops and restarts it cleanly instead.
+            bool releasedUpFront = wasSweeping && !ReferenceEquals(peak, _analyzeSourceMarker);
+            if (releasedUpFront)
             {
                 Stop();
             }
@@ -1467,7 +1489,23 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
                 MaxCaptureBytes,
                 MaxCaptureSeconds);
 
-            IRadioSource? source = OpenSource();
+            IRadioSource? source;
+            if (releasedUpFront)
+            {
+                source = OpenSource();
+            }
+            else
+            {
+                // The sweep still holds the radio (the analyze runs from its completion callback).
+                // Hand the running source to the capture instead of opening a second one: the
+                // fake sources accept a capture while streaming, and the real device rejects a
+                // second open. The finally block below restarts the sweep afterwards.
+                lock (_gate)
+                {
+                    source = _radio;
+                }
+            }
+
             if (source is null)
             {
                 AnalyzeStatus = "No radio available for the analyze.";
@@ -1520,10 +1558,24 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
                     _ = ex;
                 }
 
-                source.Dispose();
+                if (releasedUpFront)
+                {
+                    // The analyze opened this source, so the analyze owns its lifetime.
+                    source.Dispose();
+                }
+                // Otherwise the sweep still owns the source: it is stopped here and restarted by
+                // the outer finally, which must not dispose the radio the sweep is about to reuse.
             }
 
             AnalyzeStatus = $"Captured {capture.SampleCount} samples at {plan.SampleRateHz / 1e6:F1} Msps; analyzing.";
+
+            if (CaptureOverrideForTests is not null)
+            {
+                // Test seam: replace the fake source's generic tone with the signal under test, so
+                // the whole analyze path (capture -> features -> classify -> record -> pane text)
+                // runs headless over a known waveform.
+                capture = capture with { Samples = CaptureOverrideForTests(capture.SampleRateHz) };
+            }
 
             SignalFeatures features = FeatureExtractor.Extract(capture.Samples, capture.SampleRateHz);
             ClassificationResult result = ModulationClassifier.Classify(features);
@@ -1534,15 +1586,19 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             PlotTrace envelope = CapturePlots.Envelope(capture.Samples, capture.SampleRateHz);
             PlotTrace instFreq = CapturePlots.InstantaneousFrequency(capture.Samples, capture.SampleRateHz);
 
-            if (CaptureDirectoryOverride is string dir && !string.Equals(dir, _captureDirOverrideApplied, StringComparison.Ordinal))
-            {
-                _recorder.Rotate();
-                _captureDirOverrideApplied = dir;
-            }
-
             string capturePath = string.Empty;
             try
             {
+                // The recorder is built once, so pointing the override at a new folder means a
+                // new recorder over that folder (a test's throwaway directory). The first time
+                // the override is applied, drop anything the default folder already held.
+                if (CaptureDirectoryOverride is string dir && !string.Equals(dir, _captureDirOverrideApplied, StringComparison.Ordinal))
+                {
+                    _recorder = new CaptureRecorder(dir);
+                    _captureDirOverrideApplied = dir;
+                    _recorder.Rotate();
+                }
+
                 RecordedCapture recorded = _recorder.Save(
                     capture,
                     new ClassificationSummary(result.ClassText, result.Confidence));
@@ -1570,6 +1626,14 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             {
                 Start();
             }
+            else if (wasSweeping && IsSweeping)
+            {
+                // The sweep was never released (analyze ran from its own callback thread): give
+                // the radio back to it by stopping and restarting outside the callback stack.
+                _analyzeSourceMarker = null;
+                Stop();
+                Start();
+            }
         }
     }
 
@@ -1593,6 +1657,9 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 
         PeakRow target = rows[Math.Abs(_analyzeRoundRobinIndex++) % rows.Count];
         SelectedPeak = target;
+        // The tick runs from the sweep's completion callback: mark the target so the analyze
+        // borrows the running sweep's radio instead of trying to stop and re-open it.
+        _analyzeSourceMarker = target;
         _autoAnalyzeTickActive = true;
         return RunAutoAnalyzeAsync(target);
     }
@@ -1601,12 +1668,15 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     {
         try
         {
-            await AnalyzeSelectedPeakAsync().ConfigureAwait(false);
+            // Analyze the row this tick picked, not whatever happens to be selected by the time
+            // the previous analyze finishes: the round-robin index and the selection are set
+            // together here, and a later tick must never have its target overwritten by an
+            // earlier analyze still unwinding.
+            await AnalyzePeakAsync(target).ConfigureAwait(false);
         }
         finally
         {
             _autoAnalyzeTickActive = false;
-            _ = target;
         }
     }
 
