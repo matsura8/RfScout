@@ -12,3 +12,5 @@ All notable changes are listed here. Format: [Keep a Changelog](https://keepacha
 ### Added
 - Project scaffold: WPF app, core library layout, unit tests, CI.
 
+
+
