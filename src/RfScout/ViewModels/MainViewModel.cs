@@ -2276,7 +2276,11 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         _lastPeakFloorSequence = Frames.Sequence;
         _floorDirtyBins = frame.BinCount;
 
-        IReadOnlyList<double> floor = _peakFloor.Update(frame);
+        // Temporal floor (each bin's own history) combined with a spatial floor (the bins around
+        // it), so steady carriers such as FM stations are found as well as intermittent signals.
+        IReadOnlyList<double> floor = SpatialFloor.Combine(
+            _peakFloor.Update(frame),
+            SpatialFloor.Compute(frame, SpatialFloor.HalfWindowBins(frame.BinWidthHz)));
         IReadOnlyList<DetectedPeak> detections = _peakDetector.Detect(frame, floor);
         IReadOnlyList<TrackedPeak> tracks = _peakTracker.Update(detections, frame.BinWidthHz, frame.UtcTimestamp);
 
