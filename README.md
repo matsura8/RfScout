@@ -63,7 +63,7 @@ your use is legal where you are.
 | OS | Windows 10 or 11, x64 |
 | Radio | HackRF One. Sweep mode needs firmware with USB API 1.02 or later (developed with firmware v2.3.1). |
 | Driver | **WinUSB**, as installed by the HackRF Windows drivers or by [Zadig](https://zadig.akeo.ie/) |
-| To build | [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) |
+| To build | [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) 10.0.404 or a later 10.0.4xx patch (pinned in `global.json`) |
 | To rebuild the native DLLs (optional) | git, CMake, Ninja, Visual Studio 2022 Build Tools with the C++ workload |
 
 The native dependencies (`hackrf.dll`, `libusb-1.0.dll`, pthreads) are committed in
@@ -105,9 +105,8 @@ dotnet build -c Release -warnaserror               # analyzers, including the se
 ```
 
 CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs these steps plus the
-`--self-test` smoke run on every push and pull request. CI installs the latest .NET 10 SDK, which
-can report analyzer warnings that an older local SDK does not. If CI fails where your local build
-passes, update your SDK.
+`--self-test` smoke run on every push and pull request. CI builds with the .NET SDK pinned in `global.json`, so a
+local build with that SDK sees the same analyzer results. To move to a newer SDK, update `global.json`.
 
 **Hardware tests** need a HackRF plugged in. They log what they see on the air rather than failing
 on a quiet band.
