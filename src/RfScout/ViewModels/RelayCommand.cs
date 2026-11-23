@@ -14,6 +14,7 @@ public sealed class RelayCommand : ICommand
 {
     private readonly Action<object?> _run;
     private readonly Predicate<object?>? _canRun;
+    private EventHandler? _explicitHandlers;
 
     /// <summary>A command that takes nothing.</summary>
     public RelayCommand(Action run, Predicate<object?>? canRun = null)
@@ -31,12 +32,29 @@ public sealed class RelayCommand : ICommand
         _canRun = canRun;
     }
 
-    public event EventHandler? CanExecuteChanged;
+    /// <summary>
+    /// Hooked to <see cref="CommandManager.RequerySuggested"/>, so bound buttons re-check
+    /// CanExecute after input and whenever the view calls CommandManager.InvalidateRequerySuggested.
+    /// </summary>
+    public event EventHandler? CanExecuteChanged
+    {
+        add
+        {
+            CommandManager.RequerySuggested += value;
+            _explicitHandlers += value;
+        }
+
+        remove
+        {
+            CommandManager.RequerySuggested -= value;
+            _explicitHandlers -= value;
+        }
+    }
 
     public bool CanExecute(object? parameter) => _canRun?.Invoke(parameter) ?? true;
 
     public void Execute(object? parameter) => _run(parameter);
 
     /// <summary>Ask WPF to re-check CanExecute on every control bound to this command.</summary>
-    public void RaiseCanExecuteChanged() => CanExecuteChanged?.Invoke(this, EventArgs.Empty);
+    public void RaiseCanExecuteChanged() => _explicitHandlers?.Invoke(this, EventArgs.Empty);
 }
