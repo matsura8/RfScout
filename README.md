@@ -1,4 +1,4 @@
-﻿# RfScout
+# RfScout
 
 **A receive-only HackRF One spectrum scanner for Windows.** RfScout sweeps up to 6 GHz, shows a live
 spectrum and waterfall, finds and tracks the signals worth looking at, and works out what kind of
@@ -32,11 +32,11 @@ device is behind each one.
   so on, with a confidence and the measurements behind the decision. Captures are saved as `.cs8`
   with SigMF metadata under `%LOCALAPPDATA%\RfScout\captures`, with a size cap and oldest-first
   clean-up, and can be played back.
-- **Identify devices** *(in progress)*. It decodes the public identifiers devices broadcast:
+- **Identify devices** *(done, live checks partly pending)*. It decodes the public identifiers devices broadcast:
   ISM-band sensors and remotes (through [rtl_433](https://github.com/merbanan/rtl_433)), aircraft
   ADS-B (Mode S), FM station names (RDS) and ship AIS. Anything else is classified by band,
   modulation, bandwidth and burst pattern.
-- **Locate**. Stay tuned to a chosen peak in narrowband mode and watch a large live
+- **Locate** *(done)*. Stay tuned to a chosen peak in narrowband mode and watch a large live
   signal-strength meter, a rolling 60-second strength graph and a peak-hold number, with an
   optional audio tone whose pitch rises with strength (off by default). Built for walking a
   directional antenna toward a transmitter. **A single HackRF gives frequency location and
@@ -92,7 +92,7 @@ radio, and exits with 0 when they pass.
 ## Tests and checks
 
 Tests use xUnit v3 on Microsoft.Testing.Platform (see `global.json`). The DSP, peak, classifier,
-recording and display code is tested against synthetic signals, so no radio is needed. The suite currently has 253 tests.
+recording and display code is tested against synthetic signals, so no radio is needed. The suite currently has 302 tests (5 skipped with documented reasons).
 
 ```powershell
 dotnet test --filter-not-trait Category=Hardware   # unit tests, no radio needed
@@ -191,3 +191,6 @@ The binaries in `native/x64` are third-party software under their own licenses:
 libhackrf (BSD-3-Clause) and the HackRF tools (GPL-2.0-or-later), both from
 [greatscottgadgets/hackrf v2026.01.3](https://github.com/greatscottgadgets/hackrf/tree/v2026.01.3),
 libusb (LGPL-2.1-or-later) and pthreads4w (Apache-2.0).
+
+
+
