@@ -11,6 +11,7 @@ using RfScout.Core;
 using RfScout.Core.Analysis;
 using RfScout.Core.Decoders;
 using RfScout.Core.Display;
+using RfScout.Core.Locate;
 using RfScout.Core.Fakes;
 using RfScout.Core.Recording;
 using RfScout.Core.Streaming;
@@ -74,6 +75,29 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     private readonly DbRange _dbRange = new(DefaultDbMin, DefaultDbMax);
 
     private IRadioSource? _radio;
+
+    // M5 locate state: the controller is Core logic (meter, 60 s graph, peak hold, tone map);
+    // the source and the flag are the locate session, which owns the radio while it runs.
+    private readonly LocateController _locate = new();
+    private IRadioSource? _locateSource;
+    private bool _isLocating;
+    private bool _locateWasSweeping;
+    private int _locatePeakId;
+    private bool _locateTone;
+    private System.Windows.Media.MediaPlayer? _locateToneSource;
+
+    /// <summary>Meter range the graph and the tone share: floor to strong.</summary>
+    public const double MeterFloorDb = LocateController.MeterMinDb;
+    public const double MeterTopDb = LocateController.MeterMaxDb;
+
+    /// <summary>Locate always runs at the radio's minimum capture rate: narrowest filter,
+    /// most time per measurement, and the rate the strength meter is calibrated for.</summary>
+    private const int LocateSampleRateHz = 2_000_000;
+
+    /// <summary>IQ samples per locate window: 500 ms at 2 Msps, so the graph gets a point
+    /// about twice a second and each window is short enough to follow walking with an
+    /// antenna. The device layer enforces the 2048-sample floor.</summary>
+    private const int LocateWindowSamples = 1_000_000;
     private SpectrumViewport _viewport = new(SweepPreset.MinTunableHz, SweepPreset.MaxTunableHz);
     private SweepSourceKind _sourceKind = SweepSourceKind.HackRf;
     private bool _isSweeping;
@@ -172,6 +196,11 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         AnalyzePeakCommand = new RelayCommand(
             _ => _ = AnalyzeSelectedPeakAsync(),
             _ => SelectedPeak is not null && !IsAnalyzing);
+        LocatePeakCommand = new RelayCommand(
+            _ => _ = LocateSelectedPeakAsync(),
+            _ => SelectedPeak is not null && !IsLocating && !IsAnalyzing);
+        ExitLocateCommand = new RelayCommand(ExitLocate, _ => IsLocating);
+        ResetLocatePeakCommand = new RelayCommand(static _ => { }, _ => IsLocating);
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -179,6 +208,9 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     /// <summary>Raised when the view should repaint. The dispatcher timer does this on a tick, and
     /// a synthetic sweep raises it straight away so a test sees a frame without waiting.</summary>
     public event EventHandler? NeedsRedraw;
+
+    /// <summary>Raised when locate windows arrive, so the view repaints the meter and graph.</summary>
+    public event EventHandler? LocateUpdated;
 
     /// <summary>Raised with true when the operator must confirm before antenna power or the amp goes on.</summary>
     public event Func<string, bool>? NeedsConfirmation;
@@ -210,6 +242,15 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 
     /// <summary>M3: analyze the selected peak (the detail pane's button and Enter in the peak table).</summary>
     public ICommand AnalyzePeakCommand { get; private set; } = null!;
+
+    /// <summary>M5: stop the sweep and stay tuned to the selected peak in narrowband locate mode.</summary>
+    public ICommand LocatePeakCommand { get; private set; } = null!;
+
+    /// <summary>M5: leave locate and restart the sweep that was running before it.</summary>
+    public ICommand ExitLocateCommand { get; private set; } = null!;
+
+    /// <summary>M5: clear the locate peak-hold number.</summary>
+    public ICommand ResetLocatePeakCommand { get; private set; } = null!;
 
     /// <summary>True while a sweep is running.</summary>
     public bool IsSweeping
@@ -1410,6 +1451,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         }
 
         Stop();
+        ExitLocate();
     }
 
     private IRadioSource? OpenSource()
@@ -1432,6 +1474,442 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     }
 
     private void OnSpectrumAvailable(object? sender, SpectrumFrameEventArgs e) => _frames.Offer(e.Frame);
+
+    // ---------------------------------------------------------------------------
+    // M5 locate: stay tuned to one peak and watch its strength.
+    //
+    // The rules the sweep already follows apply here too: one mode at a time, the
+    // radio is never owned by two paths at once, and leaving a mode gives the radio
+    // back to whatever was running before. Locate borrows the analyze sequencing
+    // (stop the sweep, open the source, stream narrowband windows, then restart the
+    // sweep), but instead of one bounded capture it keeps streaming: the HackRF
+    // device raises LocateSampleAvailable with a fresh window every ~0.25 s, the
+    // Core LocateController folds each into the meter, the 60 s graph and the peak
+    // hold, and the tone pitch follows strength when the operator turns it on.
+    // ---------------------------------------------------------------------------
+
+    /// <summary>True while the radio is tuned to one peak for locate.</summary>
+    public bool IsLocating
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _isLocating;
+            }
+        }
+    }
+
+    /// <summary>Live strength of the located peak, dBFS, for the big meter.</summary>
+    public double LocateCurrentDb
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _locate.CurrentDb;
+            }
+        }
+    }
+
+    /// <summary>Loudest strength since locate started (or since the last reset).</summary>
+    public double LocatePeakDb
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _locate.PeakDb;
+            }
+        }
+    }
+
+    /// <summary>Meter text, e.g. "-42.3 dBFS".</summary>
+    public string LocateCurrentText
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return string.Format(CultureInfo.InvariantCulture, "{0:F1} dBFS", _locate.CurrentDb);
+            }
+        }
+    }
+
+    /// <summary>Peak-hold text.</summary>
+    public string LocatePeakText
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return string.Format(CultureInfo.InvariantCulture, "{0:F1} dBFS", _locate.PeakDb);
+            }
+        }
+    }
+
+    /// <summary>Current strength mapped to 0..1 for the meter bar.</summary>
+    public double LocateMeterFraction
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return LocateController.ToneGainFor(_locate.CurrentDb);
+            }
+        }
+    }
+
+    /// <summary>Graph snapshot for the 60 s strength plot (seconds since locate, dBFS).</summary>
+    public IReadOnlyList<(int Second, double Db)> LocateGraph()
+    {
+        lock (_gate)
+        {
+            return _locate.SnapshotGraph();
+        }
+    }
+
+    /// <summary>Audio tone follows strength, off by default per the brief.</summary>
+    public bool LocateToneEnabled
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _locateTone;
+            }
+        }
+
+        set
+        {
+            bool on;
+            lock (_gate)
+            {
+                if (_locateTone == value)
+                {
+                    return;
+                }
+
+                _locateTone = value;
+                on = value;
+            }
+
+            if (on)
+            {
+                // MediaPlayer is a dispatcher object; marshal so any caller thread is safe.
+                System.Windows.Application.Current?.Dispatcher.Invoke(StartLocateTone);
+            }
+            else
+            {
+                System.Windows.Application.Current?.Dispatcher.Invoke(StopLocateTone);
+            }
+
+            OnPropertyChanged();
+        }
+    }
+
+    /// <summary>Permanent note: what a single HackRF can and cannot tell you.</summary>
+    public static string LocateCaveatText =>
+        "A single HackRF gives frequency location and relative signal strength, not direction or position.";
+
+    /// <summary>Tone frequency for the current strength, when the tone is on.</summary>
+    public double LocateToneHz
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return LocateController.ToneHzFor(_locate.CurrentDb);
+            }
+        }
+    }
+
+    /// <summary>Tone gain for the current strength, when the tone is on.</summary>
+    public double LocateToneGain
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return LocateController.ToneGainFor(_locate.CurrentDb);
+            }
+        }
+    }
+
+    /// <summary>Locate the selected peak: stop the sweep and stay tuned to it.</summary>
+    public Task LocateSelectedPeakAsync() => LocatePeakAsync(SelectedPeak);
+
+    /// <summary>
+    /// Enter locate on one peak row. The sweep is stopped first (one mode at a time);
+    /// leaving locate restarts it. The locate stream runs on the source, so this call
+    /// returns once the stream is running, not when locate ends.
+    /// </summary>
+    public async Task LocatePeakAsync(PeakRow? peak)
+    {
+        if (peak is null)
+        {
+            StatusText = "Nothing to locate: select a peak first.";
+            return;
+        }
+
+        lock (_gate)
+        {
+            if (_isLocating || _analyze.IsBusy)
+            {
+                return;
+            }
+        }
+
+        bool wasSweeping = IsSweeping;
+        try
+        {
+            _analyze.BeginAnalyze();
+        }
+        catch (InvalidOperationException)
+        {
+            StatusText = "Analyze is busy: one at a time.";
+            return;
+        }
+
+        try
+        {
+            if (wasSweeping)
+            {
+                Stop();
+            }
+
+            IRadioSource? source = OpenSource();
+            if (source is null)
+            {
+                StatusText = "No radio available for locate.";
+                return;
+            }
+
+            try
+            {
+                source.LocateSampleAvailable += OnLocateSample;
+                source.Stopped += OnStopped;
+                source.SetGains(LnaDb, VgaDb);
+                source.SetRfAmplifier(RfAmp);
+                source.SetAntennaPower(AntennaPower);
+                source.StartLocate((long)peak.CenterHz, LocateSampleRateHz, LocateWindowSamples);
+
+                lock (_gate)
+                {
+                    _locateSource = source;
+                    _locateWasSweeping = wasSweeping;
+                    _locatePeakId = peak.Id;
+                    _isLocating = true;
+                    _locate.Start(DateTimeOffset.UtcNow);
+                }
+
+                StatusText = string.Format(
+                    CultureInfo.InvariantCulture,
+                    "Locating peak {0} at {1}: {2}",
+                    peak.Id,
+                    peak.FrequencyText,
+                    LocateCaveatText);
+                OnPropertyChanged(nameof(IsLocating));
+                RaiseLocateUpdated();
+            }
+            catch (Exception ex) when (ex is HackRfException or InvalidOperationException or ArgumentException or NotSupportedException)
+            {
+                source.LocateSampleAvailable -= OnLocateSample;
+                source.Stopped -= OnStopped;
+                source.Dispose();
+                StatusText = $"Could not start locate: {ex.Message}";
+                return;
+            }
+        }
+        finally
+        {
+            _analyze.EndAnalyze();
+        }
+    }
+
+    /// <summary>Leave locate and give the radio back to the sweep that was running before.</summary>
+    public void ExitLocate()
+    {
+        IRadioSource? source;
+        bool restartSweep;
+        lock (_gate)
+        {
+            if (!_isLocating)
+            {
+                return;
+            }
+
+            _isLocating = false;
+            source = _locateSource;
+            _locateSource = null;
+            restartSweep = _locateWasSweeping;
+            _locateWasSweeping = false;
+        }
+
+        StopLocateTone();
+
+        if (source is not null)
+        {
+            source.LocateSampleAvailable -= OnLocateSample;
+            source.Stopped -= OnStopped;
+            try
+            {
+                source.StopStream();
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or ObjectDisposedException)
+            {
+                _ = ex;
+            }
+
+            source.Dispose();
+        }
+
+        StatusText = "Left locate.";
+        OnPropertyChanged(nameof(IsLocating));
+        RaiseLocateUpdated();
+
+        if (restartSweep && !IsSweeping)
+        {
+            Start();
+        }
+    }
+
+    /// <summary>Clear the peak-hold number; the live reading and graph are untouched.</summary>
+    public void ResetLocatePeak()
+    {
+        lock (_gate)
+        {
+            _locate.ResetPeakHold();
+        }
+
+        OnPropertyChanged(nameof(LocatePeakDb));
+        OnPropertyChanged(nameof(LocatePeakText));
+        RaiseLocateUpdated();
+    }
+
+    private void OnLocateSample(object? sender, IqCaptureEventArgs e)
+    {
+        lock (_gate)
+        {
+            if (!_isLocating)
+            {
+                return; // a late window from a locate already left
+            }
+
+            _locate.Offer(e.Capture.Samples, DateTimeOffset.UtcNow);
+        }
+
+        OnPropertyChanged(nameof(LocateCurrentDb));
+        OnPropertyChanged(nameof(LocatePeakDb));
+        OnPropertyChanged(nameof(LocateCurrentText));
+        OnPropertyChanged(nameof(LocatePeakText));
+        OnPropertyChanged(nameof(LocateMeterFraction));
+        OnPropertyChanged(nameof(LocateToneHz));
+        OnPropertyChanged(nameof(LocateToneGain));
+        UpdateLocateTone();
+        RaiseLocateUpdated();
+    }
+
+    private void RaiseLocateUpdated() => LocateUpdated?.Invoke(this, EventArgs.Empty);
+
+    private void StartLocateTone()
+    {
+        if (_locateToneSource is not null)
+        {
+            return;
+        }
+
+        try
+        {
+            var wave = new System.Windows.Media.MediaPlayer();
+            wave.Open(new Uri("pack://application:,,,/RfScout;component/Assets/tone.wav", UriKind.Absolute));
+            _locateToneSource = wave;
+            UpdateLocateTone();
+            wave.Play();
+        }
+        catch (Exception ex) when (ex is UriFormatException or InvalidOperationException or NotSupportedException)
+        {
+            // No tone asset on this machine: the meter and graph still work, so log it in
+            // the status line rather than failing locate.
+            _locateToneSource = null;
+            StatusText = $"Locate tone unavailable: {ex.Message}";
+        }
+    }
+
+    private void UpdateLocateTone()
+    {
+        System.Windows.Media.MediaPlayer? wave = _locateToneSource;
+        if (wave is null)
+        {
+            return;
+        }
+
+        double speed, volume;
+        lock (_gate)
+        {
+            if (!_locateTone)
+            {
+                return;
+            }
+
+            speed = Math.Clamp(LocateController.ToneHzFor(_locate.CurrentDb) / 440.0, 0.25, 4.0);
+            volume = Math.Clamp(LocateController.ToneGainFor(_locate.CurrentDb), 0.05, 1.0);
+        }
+
+        // MediaPlayer touches the audio device: keep every call on the dispatcher.
+        void Apply()
+        {
+            try
+            {
+                wave.SpeedRatio = speed;
+                wave.Volume = volume;
+            }
+            catch (InvalidOperationException ex)
+            {
+                _ = ex;
+            }
+        }
+
+        System.Windows.Application.Current?.Dispatcher.BeginInvoke(new Action(Apply));
+    }
+
+    private void StopLocateTone()
+    {
+        System.Windows.Media.MediaPlayer? wave = Interlocked.Exchange(ref _locateToneSource, null);
+        if (wave is null)
+        {
+            return;
+        }
+
+        void Close()
+        {
+            try
+            {
+                wave.Stop();
+                wave.Close();
+            }
+            catch (InvalidOperationException ex)
+            {
+                _ = ex;
+            }
+        }
+
+        if (System.Windows.Application.Current is { } app)
+        {
+            if (app.Dispatcher.CheckAccess())
+            {
+                Close();
+            }
+            else
+            {
+                app.Dispatcher.Invoke(new Action(Close));
+            }
+        }
+        else
+        {
+            Close();
+        }
+    }
 
     /// <summary>Capture completion arrives on the source thread; hand it to the waiting analyze.</summary>
     private void OnCaptureAvailable(object? sender, IqCaptureEventArgs e)

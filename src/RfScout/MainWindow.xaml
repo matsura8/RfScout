@@ -25,6 +25,14 @@
     <StackPanel Grid.Row="0" Grid.Column="1" Margin="16,0,0,0" Orientation="Vertical"
                 AutomationProperties.Name="Peak controls">
       <StackPanel Orientation="Horizontal">
+        <Button Content="Locate" Command="{Binding LocatePeakCommand}" Margin="0,0,8,0"
+                AutomationProperties.Name="Locate the selected peak"
+                AutomationProperties.HelpText="Stop the sweep and stay tuned to the selected peak, showing live signal strength. Shortcut: L." />
+        <Button Content="Exit locate" Command="{Binding ExitLocateCommand}"
+                AutomationProperties.Name="Exit locate and resume sweeping"
+                AutomationProperties.HelpText="Leave locate and restart the sweep. Shortcut: Esc." />
+      </StackPanel>
+      <StackPanel Orientation="Horizontal">
         <Label Target="PeakThresholdBox" Content="Threshold dB" />
         <TextBox x:Name="PeakThresholdBox" Width="48" Text="{Binding PeakThresholdDb, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                  AutomationProperties.Name="Peak detection threshold in dB" />
@@ -70,6 +78,50 @@
                     AutomationProperties.HelpText="Scrolling waterfall of recent sweeps">
       <ctl:SpectrumGrid x:Name="Waterfall" ProbeRequested="OnWaterfallProbe" />
     </ContentControl>
+
+    <!-- M5 locate overlay: covers the waterfall while locate owns the radio, so the
+         operator sees the strength view, not stale sweep rows. -->
+    <Border x:Name="LocatePanel" Grid.Row="1" Grid.Column="1" Width="260" Margin="16,16,0,0"
+            Background="{DynamicResource {x:Static SystemColors.WindowBrushKey}}"
+            BorderBrush="{DynamicResource {x:Static SystemColors.ActiveBorderBrushKey}}"
+            BorderThickness="1" Visibility="Collapsed"
+            AutomationProperties.Name="Locate view"
+            AutomationProperties.HelpText="Live signal strength of the located peak: meter, 60 second graph, peak hold and tone.">
+      <StackPanel Margin="8">
+        <TextBlock Text="Locate" FontSize="16" AutomationProperties.HeadingLevel="Level2" />
+        <TextBlock x:Name="LocateFreqText" Text="{Binding SelectedPeakText}" TextWrapping="Wrap"
+                   Margin="0,4,0,0" AutomationProperties.Name="Located frequency" />
+        <TextBlock Text="{Binding LocateCurrentText}" FontSize="30" Margin="0,8,0,0"
+                   AutomationProperties.Name="Live signal strength meter"
+                   AutomationProperties.LiveSetting="Polite" />
+        <ProgressBar x:Name="LocateMeterBar" Height="22" Margin="0,4,0,0"
+                     Minimum="0" Maximum="1"
+                     Value="{Binding LocateMeterFraction, Mode=OneWay}"
+                     AutomationProperties.Name="Signal strength meter bar"
+                     AutomationProperties.HelpText="Live strength from the noise floor to the top of the meter range." />
+        <Border x:Name="LocateGraphHost" Height="90" Margin="0,8,0,0"
+                BorderBrush="{DynamicResource {x:Static SystemColors.ActiveBorderBrushKey}}"
+                BorderThickness="1"
+                AutomationProperties.Name="Signal strength graph, last 60 seconds"
+                AutomationProperties.HelpText="Rolling 60 second graph of signal strength in dBFS.">
+          <Canvas x:Name="LocateGraphCanvas" ClipToBounds="True" />
+        </Border>
+        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+          <TextBlock Text="Peak hold:" VerticalAlignment="Center" />
+          <TextBlock Text="{Binding LocatePeakText}" Margin="6,0,0,0" FontWeight="Bold"
+                     AutomationProperties.Name="Peak hold value" />
+          <Button Content="Reset" Command="{Binding ResetLocatePeakCommand}" Margin="8,0,0,0"
+                  AutomationProperties.Name="Reset locate peak hold" />
+        </StackPanel>
+        <CheckBox Content="Audio tone (pitch follows strength)" IsChecked="{Binding LocateToneEnabled, Mode=TwoWay}"
+                  Margin="0,8,0,0" AutomationProperties.Name="Locate audio tone"
+                  AutomationProperties.HelpText="A tone whose pitch rises with signal strength. Off by default." />
+        <TextBlock Text="{x:Static vm:MainViewModel.LocateCaveatText}" TextWrapping="Wrap" FontSize="11" Margin="0,8,0,0"
+                   AutomationProperties.Name="Locate limitations note" />
+        <Button Content="Exit locate" Command="{Binding ExitLocateCommand}" Margin="0,8,0,0"
+                AutomationProperties.Name="Exit locate and resume sweeping" />
+      </StackPanel>
+    </Border>
   </Grid>
 </Window>
 

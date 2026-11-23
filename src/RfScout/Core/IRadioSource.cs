@@ -20,6 +20,13 @@ public interface IRadioSource : IDisposable
     /// <summary>Narrowband IQ window from <see cref="StartCapture"/>. Fires on a source worker thread.</summary>
     event EventHandler<IqCaptureEventArgs>? CaptureAvailable;
 
+    /// <summary>
+    /// M5 locate: repeated IQ windows while a locate stream runs. Fires on a source worker
+    /// thread, like the other events. Sources that cannot stream raise nothing; the locate
+    /// view falls back to one-shot captures.
+    /// </summary>
+    event EventHandler<IqCaptureEventArgs>? LocateSampleAvailable;
+
     /// <summary>Raised when the device/stream stops on its own, e.g. it was unplugged. Message is for the user.</summary>
     event EventHandler<RadioStoppedEventArgs>? Stopped;
 
@@ -33,6 +40,16 @@ public interface IRadioSource : IDisposable
 
     /// <summary>Start a sweep. Throws <see cref="InvalidOperationException"/> if something is already running.</summary>
     void StartSweep(SweepPlan plan);
+
+    /// <summary>
+    /// M5 locate: tune to <paramref name="centerHz"/> and stream repeated narrowband IQ
+    /// windows of <paramref name="windowSamples"/> samples at <paramref name="sampleRateHz"/>,
+    /// raising <see cref="LocateSampleAvailable"/> per window until <see cref="StopStream"/>.
+    /// Throws <see cref="InvalidOperationException"/> if a sweep or capture is already running,
+    /// and <see cref="NotSupportedException"/> for sources that cannot stream continuously
+    /// (a recorded file, for now).
+    /// </summary>
+    void StartLocate(long centerHz, int sampleRateHz, int windowSamples);
 
     /// <summary>
     /// Start a narrowband capture of <paramref name="duration"/> at <paramref name="centerHz"/>.

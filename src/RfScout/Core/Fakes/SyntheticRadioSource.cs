@@ -140,6 +140,9 @@ public sealed class SyntheticRadioSource : IRadioSource
 
     public event EventHandler<IqCaptureEventArgs>? CaptureAvailable;
 
+    /// <summary>Raised once per locate window while <see cref="StartLocate"/> runs.</summary>
+    public event EventHandler<IqCaptureEventArgs>? LocateSampleAvailable;
+
     public event EventHandler<RadioStoppedEventArgs>? Stopped;
 
     public RadioDeviceInfo? DeviceInfo => FakeDeviceInfo;
@@ -337,6 +340,64 @@ public sealed class SyntheticRadioSource : IRadioSource
     /// <summary>Raise <see cref="Stopped"/> the way a real source does when the device is pulled.</summary>
     public void SimulateDeviceLost() =>
         Stopped?.Invoke(this, new RadioStoppedEventArgs("Synthetic source stopped.", deviceLost: true));
+
+    /// <summary>
+    /// M5 locate: hold the source running and replay <c>LocateWindowFactory</c> windows on a
+    /// background thread until <see cref="StopStream"/>. Each window is a full narrowband
+    /// capture, so the strength tracker sees a fresh level every window and the 60 s graph
+    /// fills the way it does on real air.
+    /// </summary>
+    public void StartLocate(long centerHz, int sampleRateHz, int windowSamples)
+    {
+        Enter();
+        try
+        {
+            var worker = new Thread(() =>
+            {
+                while (IsRunning)
+                {
+                    IqCapture window;
+                    lock (_gate)
+                    {
+                        window = new IqCapture(
+                            centerHz,
+                            sampleRateHz,
+                            _lnaDb,
+                            _vgaDb,
+                            _ampOn,
+                            _antennaPower,
+                            DateTimeOffset.UtcNow,
+                            LocateWindowFactory(centerHz, sampleRateHz, windowSamples));
+                    }
+
+                    if (!IsRunning)
+                    {
+                        break;
+                    }
+
+                    LocateSampleAvailable?.Invoke(this, new IqCaptureEventArgs(window));
+                    Thread.Sleep(LocateWindowIntervalMs);
+                }
+            })
+            {
+                IsBackground = true,
+                Name = "SyntheticRadioSource.Locate",
+            };
+            worker.Start();
+        }
+        catch
+        {
+            Exit();
+            throw;
+        }
+    }
+
+    /// <summary>Builds one locate window (interleaved s8 IQ) for the fake stream.</summary>
+    public Func<long, int, int, byte[]> LocateWindowFactory { get; set; } =
+        static (center, rate, samples) => SyntheticSignal.IqBytes(samples, 0.05);
+
+    /// <summary>Delay between locate windows, so a test can pace the timeline.</summary>
+    public int LocateWindowIntervalMs { get; set; } = 250;
 
     public void StopStream() => Exit();
 

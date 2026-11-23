@@ -1,5 +1,13 @@
 ﻿<Project>
   <ItemGroup>
+    <!-- M5 locate tone: a 440 Hz reference WAV shipped next to the assembly; the locate
+         view pitches it up or down with SpeedRatio as strength changes. -->
+    <None Include="$(MSBuildThisFileDirectory)Assets\tone.wav"
+          Link="Assets\tone.wav"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!--
       The band plan is data, not code: Core/Spectrum/bandplan.json ships next to the assembly so
       allocations can be edited and reviewed without recompiling, and so the test project reads

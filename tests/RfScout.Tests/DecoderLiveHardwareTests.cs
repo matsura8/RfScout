@@ -26,8 +26,9 @@ public sealed class DecoderLiveHardwareTests
     {
         using HackRfDevice radio = SweepPipelineHardwareTests.OpenRadio();
 
-        // A strong local FM station's 57 kHz RDS subcarrier sits inside a 400 kHz capture
-        // centred on the station. Pick the loudest station in the band first, then capture it.
+        // A strong local FM station's 57 kHz RDS subcarrier sits inside a 2 Msps capture
+        // centred on the station (the HackRF's minimum capture rate; 400 kHz was below it and
+        // StartCapture threw ArgumentOutOfRangeException). Pick the loudest station first.
         long centerHz = FindStrongestFmStation(radio);
         if (centerHz == 0)
         {
@@ -35,7 +36,7 @@ public sealed class DecoderLiveHardwareTests
             centerHz = 98_500_000;
         }
 
-        IqCapture? capture = Capture(radio, centerHz, 400_000, TimeSpan.FromSeconds(3));
+        IqCapture? capture = Capture(radio, centerHz, 2_000_000, TimeSpan.FromSeconds(3));
         Assert.NotNull(capture);
 
         DecoderContext ctx = DecoderContext.ForPeak(
@@ -91,7 +92,7 @@ public sealed class DecoderLiveHardwareTests
     }
 
     /// <summary>Sweep 88-108 MHz and return the centre of the strongest 200 kHz-wide bin, or 0.</summary>
-    private static long FindStrongestFmStation(HackRfDevice radio)
+    internal static long FindStrongestFmStation(HackRfDevice radio)
     {
         var frames = new List<SpectrumFrame>();
         radio.SpectrumAvailable += (_, e) =>
