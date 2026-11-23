@@ -1,0 +1,83 @@
+{
+  "_doc": [
+    "Answers DevFlow's Partner Center form filler (dev store -Web) types into the submission pages.",
+    "Listing text comes from listing.json, the package from dev msix, screenshots from store/screenshots.",
+    "ageRating answers are a declaration by the publisher to IARC: the filler only enters them when",
+    "ageRatingConfirmedBy names the person who reviewed them. The final 'Submit to the Store' click happens",
+    "only with dev store -Web -Submit and autoSubmit true; otherwise the filler stops for review."
+  ],
+  "pricing": {
+    "price": "Free",
+    "baseCurrency": "USD - United States",
+    "markets": "all",
+    "futureMarkets": true,
+    "visibility": "public",
+    "_note": "Free (/bin/bash) for every submission; the filler sets the $0 tier each run."
+  },
+  "properties": {
+    "category": "Utilities + tools",
+    "subcategory": "",
+    "collectsPersonalInfo": false,
+    "privacyPolicyUrl": "https://github.com/matsura8/RfScout/blob/main/PRIVACY.md",
+    "systemRequirements": {
+      "minimumHardware": [
+        "Keyboard",
+        "Mouse"
+      ],
+      "minimumMemory": "2 GB",
+      "recommendedMemory": "4 GB"
+    },
+    "privacyAnswerWhenPolicyRequired": "Yes",
+    "_privacyNote": "RfScout collects nothing (PRIVACY.md). Full-trust packages must give a privacy policy URL, and Partner Center only takes the URL under \"Yes\", so the filler answers Yes and links the policy."
+  },
+  "ageRating": {
+    "appType": "All Other App Types",
+    "_note": "Answers to the IARC questionnaire as Partner Center shows it (2026-11). Each 'match' is a unique part of the question text. A question with no entry stops the filler and is listed in out/store-web/age-questions.txt.",
+    "answers": [
+      {
+        "match": "ratings-relevant content",
+        "answer": "No"
+      },
+      {
+        "match": "interact or exchange content with other users",
+        "answer": "No"
+      },
+      {
+        "match": "isn't part of the initial app download",
+        "answer": "No"
+      },
+      {
+        "match": "typically age-restricted",
+        "answer": "No"
+      },
+      {
+        "match": "precise physical location with other users",
+        "answer": "No"
+      },
+      {
+        "match": "purchase digital goods",
+        "answer": "No"
+      },
+      {
+        "match": "cash rewards, gift cards",
+        "answer": "No"
+      },
+      {
+        "match": "web browser or search engine",
+        "answer": "No"
+      },
+      {
+        "match": "primarily a news or educational product",
+        "answer": "No"
+      },
+      {
+        "match": "ratings obtained directly from a ratings board",
+        "answer": "No"
+      }
+    ]
+  },
+  "ageRatingConfirmedBy": "",
+  "autoSubmit": false,
+  "notesForCertification": "RfScout is receive-only software for the HackRF One USB radio. Without a HackRF connected it starts and shows 'no radio'; all functions need the device. It needs the WinUSB driver (Zadig), which the listing explains. The app makes no network connections.",
+  "publish": "asap"
+}
