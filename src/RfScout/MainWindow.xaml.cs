@@ -1,12 +1,14 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Globalization;
 using System.Windows;
 using System.Windows.Media;
+using System.Windows.Controls;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using RfScout.Controls;
 using RfScout.Core;
 using RfScout.Core.Display;
+using RfScout.Core.Locate;
 
 namespace RfScout;
 
@@ -37,6 +39,33 @@ public partial class MainWindow : Window
 
         Loaded += (_, _) => RenderFrame();
         Closed += (_, _) => _renderTimer.Stop();
+
+        // M5 locate: show the strength panel while locate owns the radio, and redraw its
+        // graph whenever a window arrives. The view model raises the event from the source
+        // thread, so the work goes through the dispatcher.
+        if (DataContext is ViewModels.MainViewModel locateModel)
+        {
+            locateModel.LocateUpdated += (_, _) => Dispatcher.BeginInvoke(new Action(PaintLocate));
+            locateModel.PropertyChanged += (_, e) =>
+            {
+                if (e.PropertyName == nameof(ViewModels.MainViewModel.IsLocating))
+                {
+                    Dispatcher.BeginInvoke(new Action(() => LocatePanel.Visibility = locateModel.IsLocating
+                        ? Visibility.Visible
+                        : Visibility.Collapsed));
+                }
+            };
+
+            // The panel is collapsed until locate starts, so the graph canvas never gets a
+            // real size from layout; paint once the window is up so the first windows land.
+            ContentRendered += (_, _) =>
+            {
+                if (locateModel.IsLocating)
+                {
+                    PaintLocate();
+                }
+            };
+        }
     }
 
     /// <summary>Arrow keys move between peaks; Space and Enter keep their sweep/analyze meaning.</summary>
@@ -56,6 +85,14 @@ public partial class MainWindow : Window
             case System.Windows.Input.Key.Down:
                 model.MovePeakSelection(+1);
                 e.Handled = true;
+                break;
+            case System.Windows.Input.Key.L:
+                if (!model.IsLocating)
+                {
+                    _ = model.LocateSelectedPeakAsync();
+                    e.Handled = true;
+                }
+
                 break;
         }
     }
@@ -83,6 +120,80 @@ public partial class MainWindow : Window
             model.TogglePeakSort(column);
             e.Handled = true;
         }
+    }
+
+    /// <summary>Escape leaves locate from anywhere in the window.</summary>
+    protected override void OnKeyDown(System.Windows.Input.KeyEventArgs e)
+    {
+        base.OnKeyDown(e);
+        if (e.Key == System.Windows.Input.Key.Escape && DataContext is ViewModels.MainViewModel model && model.IsLocating)
+        {
+            model.ExitLocate();
+            e.Handled = true;
+        }
+    }
+
+    /// <summary>
+    /// Redraw the locate 60 s graph from the view model snapshot. Kept tiny: one polyline
+    /// across the canvas, dB on the vertical axis (the meter range), seconds on the
+    /// horizontal (the rolling window). The meter itself is data-bound.
+    /// </summary>
+    private void PaintLocate()
+    {
+        if (DataContext is not ViewModels.MainViewModel model)
+        {
+            return;
+        }
+
+        Canvas canvas = LocateGraphCanvas;
+        canvas.Children.Clear();
+
+        // The canvas sits inside a fixed-height Border, so it has a real size even before
+        // the window has ever measured it; fall back to the host's layout size.
+        double width = canvas.ActualWidth > 0 ? canvas.ActualWidth : LocateGraphHost.ActualWidth;
+        double height = canvas.ActualHeight > 0 ? canvas.ActualHeight : LocateGraphHost.ActualHeight;
+        if (width < 10 || height < 10)
+        {
+            width = 240;
+            height = 88;
+        }
+
+        IReadOnlyList<(int Second, double Db)> graph = model.LocateGraph();
+        if (graph.Count < 2)
+        {
+            return;
+        }
+
+        const double minDb = ViewModels.MainViewModel.MeterFloorDb;
+        const double maxDb = ViewModels.MainViewModel.MeterTopDb;
+        int newest = graph[^1].Second;
+        int oldest = Math.Max(0, newest - (LocateController.DefaultGraphSeconds - 1));
+
+        var points = new System.Windows.Media.PointCollection();
+        foreach ((int second, double db) in graph)
+        {
+            if (second < oldest)
+            {
+                continue;
+            }
+
+            double x = (second - oldest) / (double)(LocateController.DefaultGraphSeconds - 1) * width;
+            double y = height - ((db - minDb) / (maxDb - minDb) * height);
+            points.Add(new System.Windows.Point(x, Math.Clamp(y, 0, height)));
+        }
+
+        if (points.Count < 2)
+        {
+            return;
+        }
+
+        var line = new System.Windows.Shapes.Polyline
+        {
+            Points = points,
+            Stroke = System.Windows.Media.Brushes.DeepSkyBlue,
+            StrokeThickness = 2,
+        };
+        canvas.Children.Add(line);
     }
 
     /// <summary>A click on the waterfall: report the frequency and level under the pointer.</summary>

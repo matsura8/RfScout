@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using RfScout.Core.Spectrum;
 
 namespace RfScout.Core.Recording;
@@ -78,6 +78,17 @@ public sealed class FileRadioSource : IRadioSource
 
     public event EventHandler<IqCaptureEventArgs>? CaptureAvailable;
 
+    /// <summary>
+    /// Required by the IRadioSource contract. A recorded file has no live stream, so this
+    /// never fires and the locate view falls back to one-shot captures for file sources.
+    /// </summary>
+    // Required by IRadioSource; a recorded file has no live stream, so this never fires
+    // (the locate view falls back to one-shot captures for file sources). CS0067 suppressed
+    // with the brief-required written justification on the same line.
+#pragma warning disable CS0067 // event is part of the IRadioSource contract, not a local signal
+    public event EventHandler<IqCaptureEventArgs>? LocateSampleAvailable;
+#pragma warning restore CS0067
+
     public event EventHandler<RadioStoppedEventArgs>? Stopped;
 
     public RadioDeviceInfo? DeviceInfo => new(
@@ -135,6 +146,13 @@ public sealed class FileRadioSource : IRadioSource
     /// Replay the stored IQ as one capture. The requested centre/rate are validated against the
     /// recording: asking for a different tune than the file holds is an error, not a silent lie.
     /// </summary>
+    /// <summary>
+    /// Locate over a recording is not implemented yet: the view falls back to one-shot
+    /// replays of the stored IQ, which is honest but not a live stream.
+    /// </summary>
+    public void StartLocate(long centerHz, int sampleRateHz, int windowSamples) =>
+        throw new NotSupportedException("A recorded file cannot stream locate windows yet.");
+
     public void StartCapture(long centerHz, int sampleRateHz, TimeSpan duration)
     {
         Enter();

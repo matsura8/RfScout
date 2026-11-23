@@ -1,4 +1,4 @@
-using System.Buffers;
+﻿using System.Buffers;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
@@ -55,6 +55,7 @@ public sealed unsafe class HackRfDevice : IRadioSource
     private const long ModeIdle = 0;
     private const long ModeSweep = 1;
     private const long ModeCapture = 2;
+    private const long ModeLocate = 3;
 
     /// <summary>
     /// libhackrf hands back the context pointer passed to <c>hackrf_start_rx</c>, which is a
@@ -82,6 +83,7 @@ public sealed unsafe class HackRfDevice : IRadioSource
 
     private SpectrumAssembler? _assembler;
     private CaptureWindow? _capture;
+    private LocateWindow? _locate;
     private SweepPlan? _plan;
     private long _mode = ModeIdle;
     private long _tunedHz;
@@ -103,6 +105,9 @@ public sealed unsafe class HackRfDevice : IRadioSource
     private long _lastSweepUtcTicks = DateTimeOffset.UtcNow.UtcTicks;
     private bool _disposed;
     private int _captureDone;
+    private int _locateDone;
+    private long _locateActive;
+    private long _locateRestartArmed;
     private int _streamLive;
     private long _streamStartedMs;
     private long _lastStreamCheckMs;
@@ -257,6 +262,8 @@ public sealed unsafe class HackRfDevice : IRadioSource
 
     public event EventHandler<IqCaptureEventArgs>? CaptureAvailable;
 
+    public event EventHandler<IqCaptureEventArgs>? LocateSampleAvailable;
+
     public event EventHandler<RadioStoppedEventArgs>? Stopped;
 
     /// <summary>What the radio reported about itself when it was opened.</summary>
@@ -275,6 +282,9 @@ public sealed unsafe class HackRfDevice : IRadioSource
 
     /// <summary>True while a narrowband capture is running.</summary>
     public bool IsCapturing => Interlocked.Read(ref _mode) == ModeCapture;
+
+    /// <summary>True while a locate stream (repeating strength windows) is running.</summary>
+    public bool IsLocating => Interlocked.Read(ref _mode) == ModeLocate;
 
     /// <summary>Plan of the running sweep, null when idle or capturing.</summary>
     public SweepPlan? ActivePlan
@@ -456,6 +466,83 @@ public sealed unsafe class HackRfDevice : IRadioSource
     }
 
     /// <summary>
+    /// M5 locate: tune to <paramref name="centerHz"/> and stream continuously, raising
+    /// <see cref="LocateSampleAvailable"/> with a fresh <paramref name="windowSamples"/>-sample
+    /// IQ window about every <paramref name="windowSamples"/>/rate seconds. The stream stops
+    /// between windows (libhackrf cannot deliver a bounded window in sweep mode), which makes
+    /// each reading a clean, independent measurement of the same frequency. Runs until
+    /// <see cref="StopStream"/>.
+    /// </summary>
+    public void StartLocate(long centerHz, int sampleRateHz, int windowSamples)
+    {
+        ThrowIfDisposed();
+        if (centerHz < SweepPreset.MinTunableHz || centerHz > SweepPreset.MaxTunableHz)
+        {
+            throw new ArgumentOutOfRangeException(nameof(centerHz), centerHz, "Frequency is outside the HackRF's range.");
+        }
+
+        if (sampleRateHz is < MinCaptureSampleRateHz or > MaxSampleRateHz)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(sampleRateHz),
+                sampleRateHz,
+                $"Locate rate must be {MinCaptureSampleRateHz}-{MaxSampleRateHz} Hz.");
+        }
+
+        if (windowSamples is < 2048 or > (MaxCaptureBytes / 2))
+        {
+            throw new ArgumentOutOfRangeException(nameof(windowSamples), windowSamples, "Locate window size is out of range.");
+        }
+
+        EnterMode(ModeLocate);
+        try
+        {
+            lock (_gate)
+            {
+                _locate = new LocateWindow(windowSamples, centerHz, sampleRateHz, _lnaDb, _vgaDb, _ampOn, _antennaPowerOn);
+                _capture = null;
+                _assembler = null;
+                _plan = null;
+            }
+
+            Volatile.Write(ref _sampleRateHz, sampleRateHz);
+            Interlocked.Exchange(ref _tunedHz, centerHz);
+            Interlocked.Exchange(ref _locateActive, 1);
+            _idle.Reset();
+            StartLocateWindow();
+        }
+        catch
+        {
+            Interlocked.Exchange(ref _locateActive, 0);
+            Interlocked.Exchange(ref _mode, ModeIdle);
+            _idle.Set();
+            throw;
+        }
+    }
+
+    /// <summary>Arm the native stream for the next locate window.</summary>
+    private void StartLocateWindow()
+    {
+        IntPtr handle = _handle.DangerousGetHandle();
+        NativeMethods.ThrowForError(NativeMethods.hackrf_set_freq(handle, (ulong)TunedHz), "hackrf_set_freq");
+        NativeMethods.ThrowForError(
+            NativeMethods.hackrf_set_sample_rate(handle, SampleRateHz),
+            "hackrf_set_sample_rate");
+
+        uint filterHz = NativeMethods.hackrf_compute_baseband_filter_bw_round_down_lt(
+            (uint)(SampleRateHz * 3 / 4));
+        if (filterHz != 0)
+        {
+            NativeMethods.ThrowForError(
+                NativeMethods.hackrf_set_baseband_filter_bandwidth(handle, filterHz),
+                "hackrf_set_baseband_filter_bandwidth");
+        }
+
+        ResetStreamState();
+        StartStream(sweepMode: false);
+    }
+
+    /// <summary>
     /// Wait for the running capture to fill its window. Returns the capture, or null on timeout.
     /// Call from a worker thread, never from the UI thread, or the window stops painting.
     /// </summary>
@@ -497,9 +584,21 @@ public sealed unsafe class HackRfDevice : IRadioSource
             UnmapStream();
             Interlocked.Exchange(ref _mode, ModeIdle);
             Volatile.Write(ref _captureDone, 0);
+            Volatile.Write(ref _locateDone, 0);
         }
 
         _idle.Set();
+
+        if (Interlocked.Read(ref _locateActive) == 1 && Interlocked.Read(ref _locateRestartArmed) == 0)
+        {
+            // A locate session survives the stop between its windows; a deliberate StopStream
+            // (or a device-lost teardown, which never re-arms) ends it and drops the window.
+            Interlocked.Exchange(ref _locateActive, 0);
+            lock (_gate)
+            {
+                _locate = null;
+            }
+        }
     }
 
     public void SetGains(int lnaGainDb, int vgaGainDb)
@@ -679,6 +778,24 @@ public sealed unsafe class HackRfDevice : IRadioSource
             return;
         }
 
+        if (mode == ModeLocate)
+        {
+            LocateWindow? window;
+            lock (_gate)
+            {
+                window = _locate;
+            }
+
+            if (window is not null && window.Write(bytes))
+            {
+                // Same callback-lock rule as a capture: flag it, the DSP worker stops the
+                // stream and raises the next locate window.
+                Volatile.Write(ref _locateDone, 1);
+            }
+
+            return;
+        }
+
         _ring.Write(bytes);
     }
 
@@ -693,6 +810,12 @@ public sealed unsafe class HackRfDevice : IRadioSource
             if (Interlocked.Exchange(ref _captureDone, 0) == 1)
             {
                 FinishCapture();
+                continue;
+            }
+
+            if (Interlocked.Exchange(ref _locateDone, 0) == 1)
+            {
+                FinishLocateWindow();
                 continue;
             }
 
@@ -776,6 +899,49 @@ public sealed unsafe class HackRfDevice : IRadioSource
         if (done is not null)
         {
             CaptureAvailable?.Invoke(this, new IqCaptureEventArgs(done));
+        }
+    }
+
+    /// <summary>
+    /// A locate window filled up in the callback: stop the stream, raise the window, and arm
+    /// the next one so the caller can restart the stream for a fresh measurement.
+    /// </summary>
+    private void FinishLocateWindow()
+    {
+        IqCapture? done;
+        lock (_gate)
+        {
+            done = _locate?.Completed;
+            if (_locate is not null)
+            {
+                // Re-arm: the next window reuses this buffer.
+                _locate.Reset();
+            }
+        }
+
+        Interlocked.Exchange(ref _locateRestartArmed, 1);
+        StopStreamCore();
+        Interlocked.Exchange(ref _locateRestartArmed, 0);
+
+        if (done is not null)
+        {
+            LocateSampleAvailable?.Invoke(this, new IqCaptureEventArgs(done));
+        }
+
+        if (Interlocked.Read(ref _locateActive) == 1)
+        {
+            try
+            {
+                StartLocateWindow();
+            }
+            catch (Exception ex) when (ex is HackRfException or InvalidOperationException)
+            {
+                // The next window could not start (device unplugged mid-locate): the stream-lost
+                // watchdog or the caller reports it; do not spin here.
+                Interlocked.Exchange(ref _locateActive, 0);
+                Interlocked.Exchange(ref _mode, ModeIdle);
+                _idle.Set();
+            }
         }
     }
 
@@ -968,6 +1134,7 @@ public sealed unsafe class HackRfDevice : IRadioSource
             _parser.Reset();
             _ring.Reset();
             Volatile.Write(ref _captureDone, 0);
+            Volatile.Write(ref _locateDone, 0);
             Interlocked.Exchange(ref _blocks, 0);
             Interlocked.Exchange(ref _sweeps, 0);
             Interlocked.Exchange(ref _samples, 0);
@@ -1157,6 +1324,85 @@ public sealed unsafe class HackRfDevice : IRadioSource
                 _bytes.AsMemory(0, samples * 2));
 
             return true;
+        }
+    }
+
+    /// <summary>
+    /// M5 locate: like a <see cref="CaptureWindow"/>, but reusable. The DSP worker stops the
+    /// stream when one window fills, raises it, resets this window and restarts the stream, so
+    /// locate becomes a steady train of independent measurements of the same frequency.
+    /// </summary>
+    private sealed class LocateWindow
+    {
+        private readonly byte[] _bytes;
+        private readonly long _centerHz;
+        private readonly int _sampleRateHz;
+        private readonly int _lnaDb;
+        private readonly int _vgaDb;
+        private readonly bool _ampOn;
+        private readonly bool _antennaPower;
+        private int _written;
+
+        public LocateWindow(
+            int maxSamples,
+            long centerHz,
+            int sampleRateHz,
+            int lnaDb,
+            int vgaDb,
+            bool ampOn,
+            bool antennaPower)
+        {
+            _bytes = new byte[Math.Max(2, maxSamples * 2)];
+            _centerHz = centerHz;
+            _sampleRateHz = sampleRateHz;
+            _lnaDb = lnaDb;
+            _vgaDb = vgaDb;
+            _ampOn = ampOn;
+            _antennaPower = antennaPower;
+        }
+
+        /// <summary>Set once the window is full; further writes are ignored until <see cref="Reset"/>.</summary>
+        public IqCapture? Completed { get; private set; }
+
+        /// <summary>Fill the window; returns true exactly once, when it becomes complete.</summary>
+        public bool Write(ReadOnlySpan<byte> bytes)
+        {
+            if (Completed is not null || bytes.IsEmpty)
+            {
+                return false;
+            }
+
+            int take = Math.Min(bytes.Length, _bytes.Length - _written);
+            if (take > 0)
+            {
+                bytes[..take].CopyTo(_bytes.AsSpan(_written));
+                _written += take;
+            }
+
+            if (_written < _bytes.Length)
+            {
+                return false;
+            }
+
+            int samples = _written / 2;
+            Completed = new IqCapture(
+                _centerHz,
+                _sampleRateHz,
+                _lnaDb,
+                _vgaDb,
+                _ampOn,
+                _antennaPower,
+                DateTimeOffset.UtcNow,
+                _bytes.AsMemory(0, samples * 2));
+
+            return true;
+        }
+
+        /// <summary>Clear the window for the next round of the locate stream.</summary>
+        public void Reset()
+        {
+            Completed = null;
+            _written = 0;
         }
     }
 }

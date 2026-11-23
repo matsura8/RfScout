@@ -1,4 +1,4 @@
-# RfScout
+﻿# RfScout
 
 **A receive-only HackRF One spectrum scanner for Windows.** RfScout sweeps up to 6 GHz, shows a live
 spectrum and waterfall, finds and tracks the signals worth looking at, and works out what kind of
@@ -36,8 +36,11 @@ device is behind each one.
   ISM-band sensors and remotes (through [rtl_433](https://github.com/merbanan/rtl_433)), aircraft
   ADS-B (Mode S), FM station names (RDS) and ship AIS. Anything else is classified by band,
   modulation, bandwidth and burst pattern.
-- **Locate** *(planned)*. A large signal-strength meter and history graph for hunting a transmitter
-  down with a directional antenna. One HackRF measures strength, not direction.
+- **Locate**. Stay tuned to a chosen peak in narrowband mode and watch a large live
+  signal-strength meter, a rolling 60-second strength graph and a peak-hold number, with an
+  optional audio tone whose pitch rises with strength (off by default). Built for walking a
+  directional antenna toward a transmitter. **A single HackRF gives frequency location and
+  relative signal strength, not direction or position** - the Locate view says so too.
 
 ### Receive only
 
@@ -171,7 +174,7 @@ learning, so every label comes with the features that decided it.
 | M2 | Noise floor, peak detection and tracking, band plan, peak table | Done |
 | M3 | Narrowband capture, feature extraction, modulation classifier, SigMF recording | Done (live checks pending) |
 | M4 | Device identification: rtl_433 bridge, ADS-B, RDS, AIS | In progress |
-| M5 | Locate mode (signal-strength meter) | Planned |
+| M5 | Locate mode (signal-strength meter) | Merged when this PR lands |
 | M6 | Settings, CSV/JSON export, reconnect on unplug, release packaging | Planned |
 
 ## Contributing
