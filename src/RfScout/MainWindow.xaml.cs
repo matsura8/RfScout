@@ -345,7 +345,7 @@ public partial class MainWindow : Window
     }
 
     /// <summary>Open the first HackRF on the USB bus, or record why it failed and return null.</summary>
-    private static IRadioSource? OpenHackRf(ViewModels.MainViewModel model)
+    private static Services.HackRf.HackRfDevice? OpenHackRf(ViewModels.MainViewModel model)
     {
         try
         {
