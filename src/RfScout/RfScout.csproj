@@ -13,12 +13,17 @@
     -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- App icon: shown in Explorer, the taskbar and the title bar (also set on MainWindow). -->
+    <ApplicationIcon>Assets\rfscout.ico</ApplicationIcon>
     <RootNamespace>RfScout</RootNamespace>
     <AssemblyName>RfScout</AssemblyName>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
   </PropertyGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="RfScout.Tests" />
+  </ItemGroup>
+  <ItemGroup>
+    <Resource Include="Assets\rfscout.ico" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="System.Management" Version="11.0.0" />
