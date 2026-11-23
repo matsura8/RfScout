@@ -2326,6 +2326,37 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         ApplyFilterAndSort(Array.Empty<PeakRow>());
     }
 
+    /// <summary>
+    /// Called when the operator presses L on a muted peak. The status line explains why
+    /// locate did not start; the setter is private so only the view model writes it.
+    /// </summary>
+    public void ReportMutedLocateAttempt()
+    {
+        ExportStatusText = "That peak is muted. Clear Mute in the peak table to locate it.";
+    }
+
+    /// <summary>
+    /// How many tracked peaks the operator has muted. Shown next to the peak table so a
+    /// greyed row is never mistaken for a disappeared emitter.
+    /// </summary>
+    public int MutedPeakCount
+    {
+        get
+        {
+            IReadOnlyList<PeakRow> rows = PeakRows;
+            int count = 0;
+            foreach (PeakRow row in rows)
+            {
+                if (row.IsMuted)
+                {
+                    count++;
+                }
+            }
+
+            return count;
+        }
+    }
+
     /// <summary>Apply the filter text and sort order, then publish the visible list.</summary>
     private void ApplyFilterAndSort(IReadOnlyList<PeakRow> rows)
     {
@@ -2375,6 +2406,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         _visiblePeakRows = sorted;
         _ = selected;
         OnPropertyChanged(nameof(PeakRows));
+        OnPropertyChanged(nameof(MutedPeakCount));
         RaiseRedraw();
     }
 
@@ -2901,7 +2933,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
                 row.BestGuess,
                 row.Confidence,
                 row.LastSeenUtc,
-                row.Identifications));
+                row.Identifications,
+                row.IsMuted));
         }
 
         return result;

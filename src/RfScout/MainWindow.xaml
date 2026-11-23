@@ -53,11 +53,16 @@
         <Label Target="PeakFilterBox" Content="Filter" />
         <TextBox x:Name="PeakFilterBox" Width="140" Text="{Binding PeakFilterText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                  AutomationProperties.Name="Filter peaks by frequency, band, type or guess" />
+        <!-- Muted peaks stay in the table greyed out, so say how many there are. -->
+        <TextBlock Margin="12,0,0,0" VerticalAlignment="Center" FontSize="12"
+                   Text="{Binding MutedPeakCount, StringFormat={}{0} muted}"
+                   AutomationProperties.Name="Muted peak count"
+                   AutomationProperties.LiveSetting="Polite" />
       </StackPanel>
     </StackPanel>
 
     <DataGrid Grid.Row="2" Grid.Column="0" x:Name="PeakTable" Margin="0,16,16,0"
-              AutoGenerateColumns="False" IsReadOnly="True" CanUserSortColumns="True"
+              AutoGenerateColumns="False" CanUserSortColumns="True"
               SelectionMode="Single" SelectionUnit="FullRow"
               ItemsSource="{Binding PeakRows}"
               SelectedItem="{Binding SelectedPeak, Mode=TwoWay}"
@@ -77,7 +82,18 @@
         <DataGridTextColumn Header="Best guess" Binding="{Binding BestGuess}" Width="220" />
         <DataGridTextColumn Header="Conf" Binding="{Binding ConfidenceText}" Width="56" />
         <DataGridTextColumn Header="Last seen" Binding="{Binding LastSeenText}" Width="88" />
+        <DataGridCheckBoxColumn Header="Mute" Binding="{Binding IsMuted, UpdateSourceTrigger=PropertyChanged}" Width="48" />
       </DataGrid.Columns>
+      <DataGrid.RowStyle>
+        <!-- A muted emitter stays in the table but reads as silenced. -->
+        <Style TargetType="DataGridRow">
+          <Style.Triggers>
+            <DataTrigger Binding="{Binding IsMuted}" Value="True">
+              <Setter Property="Opacity" Value="0.45" />
+            </DataTrigger>
+          </Style.Triggers>
+        </Style>
+      </DataGrid.RowStyle>
     </DataGrid>
 
     <TextBlock Grid.Row="2" Grid.Column="1" Margin="0,0,0,0" VerticalAlignment="Bottom"

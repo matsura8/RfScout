@@ -26,6 +26,7 @@ public sealed class PeakRow : INotifyPropertyChanged
     private DateTimeOffset _lastSeenUtc = DateTimeOffset.UnixEpoch;
     private string _bandwidthClass = string.Empty;
     private bool _isSelected;
+    private bool _isMuted;
     private IReadOnlyList<RfScout.Core.Decoders.DeviceIdentification> _identifications = [];
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -167,6 +168,17 @@ public sealed class PeakRow : INotifyPropertyChanged
     {
         get => _isSelected;
         set => SetField(ref _isSelected, value);
+    }
+
+    /// <summary>
+    /// Muted emitters are kept in the table but greyed out, and the locate panel ignores
+    /// them, so the operator can silence a known pager or broadcast repeater without
+    /// losing its row.
+    /// </summary>
+    public bool IsMuted
+    {
+        get => _isMuted;
+        set => SetField(ref _isMuted, value);
     }
 
     public string FrequencyText => Core.Display.FrequencyFormat.MHz(_centerHz);

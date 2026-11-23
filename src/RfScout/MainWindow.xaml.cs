@@ -107,7 +107,17 @@ public partial class MainWindow : Window
             case System.Windows.Input.Key.L:
                 if (!model.IsLocating)
                 {
-                    _ = model.LocateSelectedPeakAsync();
+                    // A muted emitter is silenced on purpose, so L refuses until the
+                    // operator unmutes it rather than hunting a deliberately quiet signal.
+                    if (model.SelectedPeak?.IsMuted == true)
+                    {
+                        model.ReportMutedLocateAttempt();
+                    }
+                    else
+                    {
+                        _ = model.LocateSelectedPeakAsync();
+                    }
+
                     e.Handled = true;
                 }
 

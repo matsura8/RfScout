@@ -20,7 +20,8 @@ public sealed record PeakExportRow(
     string BestGuess,
     double Confidence,
     DateTimeOffset LastSeenUtc,
-    IReadOnlyList<DeviceIdentification> Identifications);
+    IReadOnlyList<DeviceIdentification> Identifications,
+    bool IsMuted = false);
 
 /// <summary>
 /// Exports the peak table and its identifications to CSV and JSON.
@@ -126,6 +127,9 @@ public static class PeakExport
         BestGuess = p.BestGuess,
         Confidence = p.Confidence,
         LastSeenUtc = p.LastSeenUtc.ToString("O", CultureInfo.InvariantCulture),
+        // Operator state, not an observation: only the JSON carries it, so the CSV columns
+        // and every existing consumer stay exactly as they are.
+        Muted = p.IsMuted,
     };
 
     private static object IdentificationObject(int peakId, DeviceIdentification id) => new
