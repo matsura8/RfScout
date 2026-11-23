@@ -1,4 +1,4 @@
-﻿namespace RfScout.Core.Locate;
+namespace RfScout.Core.Locate;
 
 /// <summary>
 /// M5 locate: turns one narrowband IQ window into a single signal-strength number, in dBFS

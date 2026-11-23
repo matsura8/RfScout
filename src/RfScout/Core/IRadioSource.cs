@@ -1,4 +1,4 @@
-﻿namespace RfScout.Core;
+namespace RfScout.Core;
 
 /// <summary>
 /// Everything a signal source must provide, so that the DSP, peak finder and decoders can be

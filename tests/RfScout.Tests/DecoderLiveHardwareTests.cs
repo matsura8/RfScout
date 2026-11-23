@@ -92,7 +92,7 @@ public sealed class DecoderLiveHardwareTests
     }
 
     /// <summary>Sweep 88-108 MHz and return the centre of the strongest 200 kHz-wide bin, or 0.</summary>
-    private static long FindStrongestFmStation(HackRfDevice radio)
+    internal static long FindStrongestFmStation(HackRfDevice radio)
     {
         var frames = new List<SpectrumFrame>();
         radio.SpectrumAvailable += (_, e) =>

@@ -1,4 +1,4 @@
-﻿using RfScout.Core;
+using RfScout.Core;
 using RfScout.Core.Dsp;
 using RfScout.Core.Fakes;
 using RfScout.Core.Locate;
@@ -74,7 +74,7 @@ public sealed class LocateTests
             Assert.True(seen[i] < seen[i - 1] - 1.0, $"ramp down: step {i} {seen[i]:F1} did not fall below {seen[i - 1]:F1}");
         }
 
-                Assert.InRange(seen[steps / 2], -18.0, -16.0); // the hill top: 0.2 amplitude, about -17 dBFS under s8 rounding
+        Assert.InRange(seen[steps / 2], -18.0, -16.0); // the hill top: 0.2 amplitude, about -17 dBFS under s8 rounding
         Assert.Equal(seen[steps / 2], locate.PeakDb, 3);
 
         // The graph timeline holds one bucket per second over the whole session.

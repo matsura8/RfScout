@@ -1,4 +1,4 @@
-﻿using System.IO;
+using System.IO;
 using RfScout.Core.Spectrum;
 
 namespace RfScout.Core.Recording;

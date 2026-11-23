@@ -1,4 +1,4 @@
-﻿using System.Buffers;
+using System.Buffers;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
@@ -589,7 +589,7 @@ public sealed unsafe class HackRfDevice : IRadioSource
 
         _idle.Set();
 
-        if (Interlocked.Read(ref _locateActive) == 1 && Interlocked.Read(ref _locateRestartArmed) == 0)
+        if (Interlocked.Read(ref _locateActive) == 1 && Interlocked.Read(ref _locateRestartArmed) == 1)
         {
             // A locate session survives the stop between its windows; a deliberate StopStream
             // (or a device-lost teardown, which never re-arms) ends it and drops the window.

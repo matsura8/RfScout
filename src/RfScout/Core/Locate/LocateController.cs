@@ -1,4 +1,4 @@
-﻿namespace RfScout.Core.Locate;
+namespace RfScout.Core.Locate;
 
 /// <summary>
 /// M5 locate state machine, kept out of WPF so the strength timeline, the peak hold and the
