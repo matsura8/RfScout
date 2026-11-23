@@ -91,6 +91,11 @@ transmits. The README and About box state this.
 - **Performance**: the DSP pipeline (s8 IQ -> FFT -> grid -> floor -> peaks -> tracks) is gated
   by a synthetic 20 Msps test; Debug-config runs measure ~6 Msps on the dev laptop, Release
   builds meet the floor (see the M6 report).
+- **Mute (gap review)**: the peak table gained a Mute checkbox column. A muted emitter keeps its
+  row but renders greyed out, a "N muted" counter sits beside the filter box, Locate refuses to
+  start on a muted peak (the status line explains why), and the JSON export carries a per-peak
+  `muted` flag so a re-imported session keeps the silenced set. The CSV gains no column: muting
+  is operator state, not an observation.
 
 ## Open questions
 - The development antenna is a short whip: weak below 30 MHz. Live identification tests

@@ -27,6 +27,8 @@ device is behind each one.
   tracked across sweeps with a stable ID, duty cycle, power history and a continuous or bursty
   label. A band plan in `bandplan.json` (US allocations, editable without rebuilding) names the
   band each peak sits in. The peak table and the markers on the plot select each other.
+  Known emitters you never want to chase (a pager base, a broadcast repeater) can be muted from
+  the table: the row stays, greyed out, and Locate skips it until you unmute it.
 - **Analyse a peak** *(done, live checks pending)*. RfScout borrows the radio from the running
   sweep, tunes to the peak with a suitable sample rate and filter, captures a short I/Q window and
   measures it: envelope statistics, an instantaneous-frequency histogram, occupied bandwidth,
