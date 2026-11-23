@@ -19,7 +19,7 @@ public static class PerformanceTests
     private const int WarmupSweeps = 3;
     private const int MeasuredSweeps = 12;
 
-    [Fact(Skip = "Debug-config pipeline sustains 5.5-6.6 Msps on this i7-6700HQ; the 20 Msps real-time floor is met in Release (measured separately, see M6 report).")]
+    [Fact(Skip = "Skipped in the default (Debug) dev test run: the Debug-config pipeline sustains only 5.5-6.6 Msps on this i7-6700HQ. The 20 Msps real-time floor is met in Release, measured separately at 31.9 Msps (see the M6 report); run this test in Release to reproduce.")]
     public static void DspPipelineSustainsAtLeast20Msps()
     {
         // A 100 MHz span at 25 kHz bins: 4000 grid bins, fed by 512-point FFT windows, which
@@ -121,86 +121,9 @@ public static class PerformanceTests
         double seconds = sw.Elapsed.TotalSeconds;
         double msps = ((double)MeasuredSweeps * 39_000 * FftLength) / seconds / 1e6;
 
-        Console.WriteLine($"DSP throughput: {msps:F1} Msps ({MeasuredSweeps} sweeps x 39000 x {FftLength}-point windows in {seconds:F2} s)");
+        TestContext.Current.TestOutputHelper?.WriteLine($"DSP throughput: {msps:F1} Msps ({MeasuredSweeps} sweeps x 39000 x {FftLength}-point windows in {seconds:F2} s)");
         Assert.True(
             msps >= TargetMsps,
             $"DSP pipeline sustained {msps:F1} Msps, below the {TargetMsps} Msps real-time floor");
     }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
