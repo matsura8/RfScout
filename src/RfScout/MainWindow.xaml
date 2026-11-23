@@ -4,6 +4,7 @@
         xmlns:ctl="clr-namespace:RfScout.Controls"
         xmlns:vm="clr-namespace:RfScout.ViewModels"
         Title="{Binding Title}" Width="640" Height="400" MinWidth="360" MinHeight="240"
+        Icon="pack://application:,,,/Assets/rfscout.ico"
         WindowStartupLocation="CenterScreen">
   <Window.DataContext>
     <vm:MainViewModel />
