@@ -195,6 +195,13 @@ Issues and pull requests are welcome. Before opening a PR, run the three command
 [Tests and checks](#tests-and-checks), and add tests for new logic in `Core`. The PR template has
 the full checklist. Report security problems privately, as described in [SECURITY.md](SECURITY.md).
 
+## Microsoft Store
+
+RfScout is packaged for the Microsoft Store as a full-trust MSIX. The package identity, listing text
+and screenshots are in [`store/`](store), and the privacy policy is [PRIVACY.md](PRIVACY.md). The
+Store version needs the same WinUSB driver as the plain build (see [Requirements](#requirements)),
+because the Store cannot install drivers.
+
 ## License
 
 RfScout is free software: you can redistribute it and/or modify it under the terms of the

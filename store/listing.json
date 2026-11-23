@@ -1,0 +1,27 @@
+{
+  "listings": {
+    "en-us": {
+      "baseListing": {
+        "title": "RfScout",
+        "shortDescription": "Receive-only spectrum scanner for the HackRF One.",
+        "description": "RfScout turns a HackRF One into a wideband spectrum scanner for Windows. It sweeps from 1 MHz to 6 GHz, shows a live spectrum and a scrolling waterfall, finds the signals worth looking at and tracks them, and works out what kind of device is behind each one.\n\nRfScout is receive only: it never transmits, and antenna power and the RF amplifier start off.\n\nRequires a HackRF One (firmware with USB API 1.02 or later) using the WinUSB driver. Install the driver once with the HackRF Windows drivers or Zadig (https://zadig.akeo.ie) before starting RfScout.\n\nReceiving and decoding radio signals is regulated differently from country to country. Make sure your use is legal where you are.\n\nRfScout is free software under the GNU GPL v3 or later. Source code: https://github.com/matsura8/RfScout",
+        "features": [
+          "Wideband sweep from 1 MHz to 6 GHz with band presets",
+          "Live spectrum with peak hold and noise floor, plus a colour-mapped waterfall",
+          "Automatic peak detection and tracking with SNR, bandwidth and duty cycle",
+          "Narrowband analysis with an explainable modulation classifier (AM, FM, OOK, FSK and more)",
+          "SigMF I/Q recording and playback",
+          "Identifies ISM sensors (rtl_433), aircraft (ADS-B), FM stations (RDS) and ships (AIS)",
+          "Locate mode: large signal-strength meter for hunting a transmitter",
+          "Receive only: never transmits"
+        ],
+        "keywords": ["HackRF", "SDR", "spectrum analyzer", "waterfall", "radio scanner", "RF", "ADS-B"],
+        "privacyPolicy": "https://github.com/matsura8/RfScout/blob/main/PRIVACY.md",
+        "supportContact": "https://github.com/matsura8/RfScout/issues",
+        "website": "https://github.com/matsura8/RfScout",
+        "copyrightAndTrademarkInfo": "Copyright 2026 RfScout contributors. Licensed under GPL-3.0-or-later.",
+        "releaseNotes": ""
+      }
+    }
+  }
+}
