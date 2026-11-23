@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.ComponentModel;
 using System.Globalization;
 using System.Diagnostics;
@@ -16,6 +16,9 @@ using RfScout.Core.Fakes;
 using RfScout.Core.Recording;
 using RfScout.Core.Streaming;
 using RfScout.Core.Spectrum;
+using RfScout.Core.Export;
+using RfScout.Core.Settings;
+using RfScout.Services;
 using System.Windows.Threading;
 using RfScout.Services.HackRf;
 
@@ -62,6 +65,16 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     private PeakDetector _peakDetector = new();
     private readonly PeakTracker _peakTracker = new();
     private BandPlan? _bandPlan = TryLoadBandPlan();
+    private string _region = AppSettings.Defaults.Region;
+    private string _colorMapName = AppSettings.Defaults.ColorMap;
+    private string? _settingsDirectory;
+    private bool _settingsLoaded;
+    private bool _settingsDirty;
+    private UnplugMonitor? _unplugMonitor;
+    private bool _deviceLostBanner;
+    private string _bannerText = string.Empty;
+    private string _exportStatusText = string.Empty;
+    private ProcessCpuTracker? _cpuTracker;
     private readonly List<PeakRow> _peakRows = [];
     private PeakRow? _selectedPeak;
     private double _peakThresholdDb = PeakDetector.DefaultThresholdDb;
@@ -201,6 +214,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             _ => SelectedPeak is not null && !IsLocating && !IsAnalyzing);
         ExitLocateCommand = new RelayCommand(ExitLocate, _ => IsLocating);
         ResetLocatePeakCommand = new RelayCommand(static _ => { }, _ => IsLocating);
+        ExportCsvCommand = new RelayCommand(ExportCsv);
+        ExportJsonCommand = new RelayCommand(ExportJson);
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -251,6 +266,12 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 
     /// <summary>M5: clear the locate peak-hold number.</summary>
     public ICommand ResetLocatePeakCommand { get; private set; } = null!;
+
+    /// <summary>M6: write the peak table and identifications to a CSV file.</summary>
+    public ICommand ExportCsvCommand { get; private set; } = null!;
+
+    /// <summary>M6: write the peak table and identifications to a JSON file.</summary>
+    public ICommand ExportJsonCommand { get; private set; } = null!;
 
     /// <summary>True while a sweep is running.</summary>
     public bool IsSweeping
@@ -465,6 +486,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             }
 
             SelectedPreset = null;
+            MarkSettingsDirty();
         }
     }
 
@@ -486,6 +508,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             }
 
             SelectedPreset = null;
+            MarkSettingsDirty();
         }
     }
 
@@ -507,6 +530,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             }
 
             SelectedPreset = null;
+            MarkSettingsDirty();
         }
     }
 
@@ -528,6 +552,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
                 return;
             }
 
+            MarkSettingsDirty();
             PushGains();
         }
     }
@@ -550,6 +575,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
                 return;
             }
 
+            MarkSettingsDirty();
             PushGains();
         }
     }
@@ -927,6 +953,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             if (changed)
             {
                 OnPropertyChanged();
+                MarkSettingsDirty();
                 RebuildPeakRows();
             }
         }
@@ -1168,6 +1195,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 
         RadioDeviceInfo? info = source.DeviceInfo;
         DeviceText = info is null ? "Radio open" : $"{info.BoardName} {info.ShortSerial} | fw {info.FirmwareVersion} | api {info.UsbApiVersionText}";
+        DeviceLostBanner = false;
+        BannerText = string.Empty;
         RaiseRedraw();
     }
 
@@ -1452,6 +1481,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 
         Stop();
         ExitLocate();
+        StopUnplugWatch();
+        SaveSettingsIfDirty();
     }
 
     private IRadioSource? OpenSource()
@@ -2187,6 +2218,16 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             _isSweeping = false;
             OnPropertyChanged(nameof(IsSweeping));
         }
+
+        // M6 unplug handling: a lost device raises the banner as well as the status line, so
+        // the operator sees it even if the status text scrolls away. The UnplugMonitor (or a
+        // replug-driven Start) clears it once the radio answers again.
+        if (e.DeviceLost)
+        {
+            DeviceLostBanner = true;
+            BannerText = "The radio stopped streaming: it may have been unplugged. Plug it back in to reconnect.";
+            DeviceText = "No radio: unplugged";
+        }
     }
 
     /// <summary>
@@ -2497,7 +2538,21 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         IRadioSource? source = _radio;
         RadioStats stats = source?.ReadStats() ?? RadioStats.Empty;
         string sweeps = stats.SweepsPerSecond.ToString("F2", CultureInfo.InvariantCulture);
-        _statsText = $"sweeps/s {sweeps} | dropped {stats.DroppedBlocks}";
+
+        // M6 status bar: sample rate, sweeps/s, dropped blocks and process CPU. The serial is
+        // carried by DeviceText, which Start() and the unplug watcher set together with it.
+        InitCpuTrackerLocked();
+        double cpu = _cpuTracker!.ReadPercent();
+        string rate = stats.SamplesPerSecond > 0
+            ? FrequencyFormat.BinWidth(stats.SamplesPerSecond) + "sps"
+            : "idle";
+        _statsText = string.Format(
+            CultureInfo.InvariantCulture,
+            "{0} | sweeps/s {1} | dropped {2} | CPU {3:F0}%",
+            rate,
+            sweeps,
+            stats.DroppedBlocks,
+            cpu);
     }
 
     private void ApplyDbRangeFromText()
@@ -2511,6 +2566,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 
         _dbRange.Set(min, max);
         AutoScale = false;
+        MarkSettingsDirty();
         RaiseRedraw();
     }
 
@@ -2551,6 +2607,452 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     }
 
     private bool Confirm(string message) => NeedsConfirmation?.Invoke(message) ?? true;
+
+
+    // ---------------------------------------------------------------------------
+    // M6: per-user settings, CSV/JSON export, unplug banner + reconnect, status-bar CPU.
+    // ---------------------------------------------------------------------------
+
+    /// <summary>
+    /// Load %LOCALAPPDATA%\RfScout\settings.json and apply it. A missing or corrupt file
+    /// silently keeps the built-in defaults (AppSettingsStore falls back for us). Idempotent;
+    /// tests point SettingsDirectory at a temp folder.
+    /// </summary>
+    public void LoadSettings()
+    {
+        AppSettings s = AppSettingsStore.Load(SettingsDirectory);
+        lock (_gate)
+        {
+            _settingsLoaded = true;
+            _region = s.Region;
+            _colorMapName = s.ColorMap;
+            _startMHzText = s.StartMHz.ToString("F3", CultureInfo.InvariantCulture);
+            _stopMHzText = s.StopMHz.ToString("F3", CultureInfo.InvariantCulture);
+            _binWidthHz = s.BinWidthHz;
+            _lnaDb = RadioGains.ClampLna(s.LnaGainDb);
+            _vgaDb = RadioGains.ClampVga(s.VgaGainDb);
+            _peakThresholdDb = s.PeakThresholdDb;
+            _peakDetector = new PeakDetector(_peakThresholdDb);
+            _dbRange.Set(s.DbMin, s.DbMax);
+            _dbMinText = _dbRange.MinDb.ToString("F0", CultureInfo.InvariantCulture);
+            _dbMaxText = _dbRange.MaxDb.ToString("F0", CultureInfo.InvariantCulture);
+            _settingsDirty = false;
+        }
+
+        OnPropertyChanged(nameof(StartMHzText));
+        OnPropertyChanged(nameof(StopMHzText));
+        OnPropertyChanged(nameof(BinWidthHz));
+        OnPropertyChanged(nameof(LnaDb));
+        OnPropertyChanged(nameof(VgaDb));
+        OnPropertyChanged(nameof(PeakThresholdDb));
+        OnPropertyChanged(nameof(DbMinText));
+        OnPropertyChanged(nameof(DbMaxText));
+        OnPropertyChanged(nameof(Region));
+        OnPropertyChanged(nameof(ColorMapName));
+        OnPropertyChanged(nameof(ColourRange));
+        RaiseRedraw();
+    }
+
+    /// <summary>Capture the current UI state and write it to the settings file.</summary>
+    public bool SaveSettingsNow()
+    {
+        AppSettings s = CurrentSettings();
+        return AppSettingsStore.Save(s, SettingsDirectory);
+    }
+
+    /// <summary>The settings object the current state describes (public for tests).</summary>
+    public AppSettings CurrentSettings()
+    {
+        lock (_gate)
+        {
+            double.TryParse(_startMHzText, NumberStyles.Float, CultureInfo.InvariantCulture, out double start);
+            double.TryParse(_stopMHzText, NumberStyles.Float, CultureInfo.InvariantCulture, out double stop);
+            return new AppSettings
+            {
+                StartMHz = start,
+                StopMHz = stop,
+                BinWidthHz = _binWidthHz,
+                LnaGainDb = _lnaDb,
+                VgaGainDb = _vgaDb,
+                PeakThresholdDb = _peakThresholdDb,
+                ColorMap = _colorMapName,
+                Region = _region,
+                DbMin = _dbRange.MinDb,
+                DbMax = _dbRange.MaxDb,
+            };
+        }
+    }
+
+    private void MarkSettingsDirty()
+    {
+        lock (_gate)
+        {
+            if (!_settingsLoaded)
+            {
+                // Do not record a save for a change made before the file was read: that would
+                // overwrite the stored span with the built-in defaults.
+                return;
+            }
+
+            _settingsDirty = true;
+        }
+    }
+
+    /// <summary>Save when something changed since the last write. Cheap; call from a timer.</summary>
+    public bool SaveSettingsIfDirty()
+    {
+        lock (_gate)
+        {
+            if (!_settingsDirty)
+            {
+                return false;
+            }
+        }
+
+        if (SaveSettingsNow())
+        {
+            lock (_gate)
+            {
+                _settingsDirty = false;
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>Band-plan region from the settings file ("US" by default).</summary>
+    public string Region
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _region;
+            }
+        }
+
+        set
+        {
+            string trimmed = value?.Trim() ?? string.Empty;
+            if (trimmed.Length == 0 || trimmed.Length > 32)
+            {
+                return;
+            }
+
+            if (!SetField(ref _region, trimmed))
+            {
+                return;
+            }
+
+            MarkSettingsDirty();
+        }
+    }
+
+    /// <summary>Waterfall colour map name from the settings file ("Viridis" or "Grayscale").</summary>
+    public string ColorMapName
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _colorMapName;
+            }
+        }
+
+        set
+        {
+            string normalized = ColorMaps.Normalize(value);
+            if (!SetField(ref _colorMapName, normalized))
+            {
+                return;
+            }
+
+            MarkSettingsDirty();
+            RaiseRedraw();
+        }
+    }
+
+    /// <summary>The colour map the waterfall draws with, resolved from the settings name.</summary>
+    public ColorMapKind ColorMapKind => ColorMaps.KindFor(ColorMapName);
+
+    /// <summary>Settings folder override for tests; null means %LOCALAPPDATA%\RfScout.</summary>
+    public string? SettingsDirectory
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _settingsDirectory;
+            }
+        }
+
+        set
+        {
+            lock (_gate)
+            {
+                _settingsDirectory = value;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Export the current peak table (with identifications) as CSV and JSON into
+    /// <paramref name="directory"/>. Returns the two file paths, or null when there are no
+    /// peaks to export. CSV cells are formula-guarded (CsvBuilder) because decoder text
+    /// arrives over the air.
+    /// </summary>
+    public (string CsvPath, string JsonPath)? ExportPeaks(string directory)
+    {
+        List<PeakExportRow> rows = ExportRows();
+        if (rows.Count == 0)
+        {
+            return null;
+        }
+
+        Directory.CreateDirectory(directory);
+        string stamp = DateTimeOffset.Now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture);
+        string csvPath = Path.Combine(directory, "rfscout-peaks-" + stamp + ".csv");
+        string jsonPath = Path.Combine(directory, "rfscout-peaks-" + stamp + ".json");
+
+        string csv = PeakExport.PeaksToCsv(rows) + "\r\n# identifications\r\n" + PeakExport.IdentificationsToCsv(rows);
+        File.WriteAllText(csvPath, csv);
+        File.WriteAllText(jsonPath, PeakExport.ToJson(rows));
+        return (csvPath, jsonPath);
+    }
+
+    /// <summary>Last export result for the status line ("Nothing to export yet", paths, errors).</summary>
+    public string ExportStatusText
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _exportStatusText;
+            }
+        }
+
+        private set
+        {
+            if (!SetField(ref _exportStatusText, value))
+            {
+                return;
+            }
+        }
+    }
+
+    /// <summary>Export the peak table to CSV in the export folder (default: settings folder).</summary>
+    public void ExportCsv() => RunExport("csv");
+
+    /// <summary>Export the peak table and identifications to JSON in the export folder.</summary>
+    public void ExportJson() => RunExport("json");
+
+    private void RunExport(string kind)
+    {
+        List<PeakExportRow> rows = ExportRows();
+        if (rows.Count == 0)
+        {
+            ExportStatusText = "Nothing to export yet: no peaks tracked.";
+            return;
+        }
+
+        try
+        {
+            string dir = SettingsDirectory ?? AppSettingsStore.DefaultDirectory;
+            Directory.CreateDirectory(dir);
+            string stamp = DateTimeOffset.Now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture);
+            string baseName = Path.Combine(dir, "rfscout-peaks-" + stamp);
+
+            if (kind == "csv")
+            {
+                string csv = PeakExport.PeaksToCsv(rows) + "\r\n# identifications\r\n" + PeakExport.IdentificationsToCsv(rows);
+                File.WriteAllText(baseName + ".csv", csv);
+                ExportStatusText = "Exported " + rows.Count + " peaks to " + baseName + ".csv";
+            }
+            else
+            {
+                File.WriteAllText(baseName + ".json", PeakExport.ToJson(rows));
+                ExportStatusText = "Exported " + rows.Count + " peaks to " + baseName + ".json";
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            ExportStatusText = "Export failed: " + ex.Message;
+        }
+    }
+
+    /// <summary>The visible peak rows as plain export records (public for tests).</summary>
+    public List<PeakExportRow> ExportRows()
+    {
+        IReadOnlyList<PeakRow> rows = PeakRows;
+        var result = new List<PeakExportRow>(rows.Count);
+        foreach (PeakRow row in rows)
+        {
+            result.Add(new PeakExportRow(
+                row.Id,
+                row.CenterHz,
+                row.PowerDb,
+                row.SnrDb,
+                row.BandwidthHz,
+                row.DutyCycle,
+                row.Activity,
+                row.Band,
+                row.BestGuess,
+                row.Confidence,
+                row.LastSeenUtc,
+                row.Identifications));
+        }
+
+        return result;
+    }
+
+    /// <summary>True while the "radio unplugged" banner should be shown.</summary>
+    public bool DeviceLostBanner
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _deviceLostBanner;
+            }
+        }
+
+        private set
+        {
+            if (!SetField(ref _deviceLostBanner, value))
+            {
+                return;
+            }
+        }
+    }
+
+    /// <summary>Banner text shown while the radio is unplugged.</summary>
+    public string BannerText
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _bannerText;
+            }
+        }
+
+        private set
+        {
+            if (!SetField(ref _bannerText, value))
+            {
+                return;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Start watching the declared hackrf device (ids from devflow.json via DevFlow's
+    /// DEVFLOW_USB_DEVICES convention, never hard-coded here). On unplug: stop cleanly and
+    /// show the banner; on replug: re-open and resume the sweep that was running.
+    /// </summary>
+    public void StartUnplugWatch()
+    {
+        (ushort Vid, ushort Pid)? id = DeclaredHackRfId();
+        if (id is null)
+        {
+            return;
+        }
+
+        UnplugMonitor monitor = new(
+            (vid, pid) => UsbEnumerator.ListDevices().Any(d => d.Vid == vid && d.Pid == pid),
+            id.Value.Vid,
+            id.Value.Pid);
+        monitor.DeviceLost += OnMonitorDeviceLost;
+        monitor.DeviceReturned += OnMonitorDeviceReturned;
+        lock (_gate)
+        {
+            _unplugMonitor?.Dispose();
+            _unplugMonitor = monitor;
+        }
+
+        monitor.Start();
+    }
+
+    /// <summary>Stop the unplug watcher (called from Dispose).</summary>
+    public void StopUnplugWatch()
+    {
+        UnplugMonitor? monitor;
+        lock (_gate)
+        {
+            monitor = _unplugMonitor;
+            _unplugMonitor = null;
+        }
+
+        monitor?.Dispose();
+    }
+
+    /// <summary>
+    /// The HackRF vid:pid from the environment DevFlow gives hardware tests
+    /// (DEVFLOW_USB_DEVICES, e.g. "hackrf=1d50:6089"). Null when nothing is declared, which
+    /// keeps the watcher off rather than guessing an id.
+    /// </summary>
+    internal static (ushort Vid, ushort Pid)? DeclaredHackRfId()
+    {
+        foreach ((string name, UsbDeviceId id) in Usb.ParseDeviceList(Environment.GetEnvironmentVariable("DEVFLOW_USB_DEVICES")))
+        {
+            if (name.Equals("hackrf", StringComparison.OrdinalIgnoreCase))
+            {
+                return (id.Vid, id.Pid);
+            }
+        }
+
+        return null;
+    }
+
+    private void OnMonitorDeviceLost(object? sender, EventArgs e)
+    {
+        bool wasSweeping;
+        lock (_gate)
+        {
+            wasSweeping = _isSweeping;
+        }
+
+        if (wasSweeping)
+        {
+            Stop();
+        }
+
+        DeviceLostBanner = true;
+        BannerText = "The HackRF was unplugged. Sweeping stopped; plug it back in to reconnect.";
+        DeviceText = "No radio: unplugged";
+    }
+
+    private void OnMonitorDeviceReturned(object? sender, EventArgs e)
+    {
+        DeviceLostBanner = false;
+        BannerText = string.Empty;
+        StatusText = "HackRF reconnected.";
+        lock (_gate)
+        {
+            _unplugMonitor?.NotifyReconnected();
+        }
+
+        Start();
+    }
+
+    /// <summary>Percent of one core this process is using, from cumulative CPU time deltas.</summary>
+    public double CpuPercent
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _cpuTracker?.ReadPercent() ?? 0.0;
+            }
+        }
+    }
+
+    private void InitCpuTrackerLocked()
+    {
+        _cpuTracker ??= new ProcessCpuTracker();
+    }
 
     private void RaiseRedraw() => NeedsRedraw?.Invoke(this, EventArgs.Empty);
 

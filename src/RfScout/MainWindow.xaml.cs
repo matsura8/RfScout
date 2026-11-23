@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Globalization;
 using System.Windows;
 using System.Windows.Media;
@@ -26,6 +26,7 @@ public partial class MainWindow : Window
     private long _lastWaterfallWrite;
     private bool _waterfallPainted;
     private int _markerCount;
+    private DispatcherTimer? _settingsTimer;
 
     public MainWindow()
     {
@@ -39,6 +40,23 @@ public partial class MainWindow : Window
 
         Loaded += (_, _) => RenderFrame();
         Closed += (_, _) => _renderTimer.Stop();
+
+        // M6: load the per-user settings once the view model exists, watch the declared
+        // HackRF for unplug/replug, and autosave every few seconds when something changed.
+        if (DataContext is ViewModels.MainViewModel settingsModel)
+        {
+            settingsModel.LoadSettings();
+            settingsModel.StartUnplugWatch();
+            _settingsTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
+            _settingsTimer.Tick += (_, _) => settingsModel.SaveSettingsIfDirty();
+            _settingsTimer.Start();
+            Closed += (_, _) =>
+            {
+                _settingsTimer.Stop();
+                settingsModel.StopUnplugWatch();
+                settingsModel.SaveSettingsIfDirty();
+            };
+        }
 
         // M5 locate: show the strength panel while locate owns the radio, and redraw its
         // graph whenever a window arrives. The view model raises the event from the source
