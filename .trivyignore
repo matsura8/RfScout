@@ -1,0 +1,7 @@
+# DevFlow audit suppressions (dev audit runs: trivy fs --scanners vuln,misconfig --severity HIGH,CRITICAL).
+# Justified: the app ships no containers. These four Dockerfiles are upstream HackRF/vcpkg CI
+# images vendored under native/src only to build libhackrf; RfScout never builds or runs them,
+# so their image hygiene findings (root USER, apt recommends) are not findings against this
+# product. Trivy 0.76 matches misconfig findings in .trivyignore by the display ID (DS-0002).
+DS-0002
+DS-0029
