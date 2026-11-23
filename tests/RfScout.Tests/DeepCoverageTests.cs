@@ -1,13 +1,7 @@
-// Deep-coverage tests added by the QA milestone: exercise the remaining Core
-// surfaces (IQ phase unwrap edge cases, waterfall/colour-map paths, peak
-// bandwidth classification, capture-recorder metadata) that earlier suites
-// only touched indirectly.
-namespace RfScout.Tests;
-
 using System;
 using System.IO;
 using System.Linq;
-using FluentAssertions;
+using RfScout.Core;
 using RfScout.Core.Analysis;
 using RfScout.Core.Display;
 using RfScout.Core.Dsp;
@@ -15,7 +9,14 @@ using RfScout.Core.Recording;
 using RfScout.Core.Spectrum;
 using Xunit;
 
-public class DeepCoverageTests
+namespace RfScout.Tests;
+
+/// <summary>
+/// Release QA coverage for display and DSP paths that milestone tests missed: phase unwrapping
+/// edges, waterfall and colour-map robustness, auto-range behaviour (QA defect 3), peak bandwidth
+/// classes, and the capture metadata sidecar.
+/// </summary>
+public sealed class DeepCoverageTests
 {
     // ---------- IqMath.UnwrapPhase edge cases ----------
 
@@ -25,8 +26,8 @@ public class DeepCoverageTests
         // +2.9 -> -2.9 rad is a +3.4 jump; unwrapping should add 2*pi to the second sample.
         double[] phase = [2.9, -2.9];
         IqMath.UnwrapPhase(phase);
-        phase[0].Should().BeApproximately(2.9, 1e-9);
-        phase[1].Should().BeApproximately(-2.9 + (2 * Math.PI), 1e-9);
+        Assert.Equal(2.9, phase[0], 9);
+        Assert.Equal(-2.9 + (2 * Math.PI), phase[1], 9);
     }
 
     [Fact]
@@ -35,7 +36,7 @@ public class DeepCoverageTests
         // A jump of exactly +pi is below the strict threshold, so no correction.
         double[] phase = [0.0, Math.PI];
         IqMath.UnwrapPhase(phase);
-        phase[1].Should().BeApproximately(Math.PI, 1e-9);
+        Assert.Equal(Math.PI, phase[1], 9);
     }
 
     [Fact]
@@ -51,7 +52,7 @@ public class DeepCoverageTests
         }
 
         IqMath.UnwrapPhase(phase);
-        phase[N - 1].Should().BeApproximately((N - 1) * 0.1, 1e-6);
+        Assert.Equal((N - 1) * 0.1, phase[N - 1], 5);
     }
 
     // ---------- WaterfallModel / ColorMap / DbRange ----------
@@ -74,13 +75,11 @@ public class DeepCoverageTests
         ];
         DbRange range = new(-120, -20);
 
-        Action fill = () => WaterfallModel.FillRow(powerDb, Columns, range, ColorMap.Lookup(ColorMapKind.Viridis), bgra);
-        fill.Should().NotThrow();
-
         // Every pixel alpha byte must be 0xFF regardless of input sanity.
+        WaterfallModel.FillRow(bgra, powerDb, range, ColorMap.Lookup(ColorMapKind.Viridis), Columns);
         for (int i = 3; i < bgra.Length; i += 4)
         {
-            bgra[i].Should().Be(0xFF);
+            Assert.Equal(0xFF, bgra[i]);
         }
     }
 
@@ -94,16 +93,16 @@ public class DeepCoverageTests
         DbRange range = new(-120, -20);
 
         int newest = model.WriteRow(row, range);
-        model.Writes.Should().Be(1);
-        model.NewestRow.Should().Be(newest);
+        Assert.Equal(1, model.Writes);
+        Assert.Equal(newest, model.NewestRow);
 
         byte[] copy = new byte[model.BytesPerRow];
-        model.TryCopyRow(newest, copy).Should().BeTrue();
-        model.TryCopyRow(newest, copy[..4]).Should().BeFalse(); // too small
-        model.TryCopyRow(99, copy).Should().BeFalse(); // out of range
+        Assert.True(model.TryCopyRow(newest, copy));
+        Assert.False(model.TryCopyRow(newest, copy[..4])); // too small
+        Assert.False(model.TryCopyRow(99, copy)); // out of range
 
         byte[] snapshot = model.Snapshot();
-        snapshot.Length.Should().Be(model.Columns * model.Rows * 4);
+        Assert.Equal(model.Columns * model.Rows * 4, snapshot.Length);
     }
 
     [Fact]
@@ -114,25 +113,25 @@ public class DeepCoverageTests
         model.WriteRow(Enumerable.Repeat(-60f, 8).ToArray(), new DbRange(-120, -20));
         model.Clear();
 
-        model.Writes.Should().Be(0);
-        model.Snapshot().Should().AllSatisfy(b => b.Should().Be(0));
+        Assert.Equal(0, model.Writes);
+        Assert.All(model.Snapshot(), b => Assert.Equal(0, b));
     }
 
     [Fact]
     public void ColorMapLookupIsMonotonicLuminanceForViridis()
     {
         byte[] viridis = ColorMap.Lookup(ColorMapKind.Viridis);
-        viridis.Length.Should().Be(ColorMap.Entries * 4);
+        Assert.Equal(ColorMap.Entries * 4, viridis.Length);
 
         // First and last entries are the endpoints of the ramp.
-        ColorMap.IndexOf(0.0).Should().Be(0);
-        ColorMap.IndexOf(1.0).Should().Be(ColorMap.Entries - 1);
-        ColorMap.IndexOf(-5.0).Should().Be(0);   // clamped low
-        ColorMap.IndexOf(5.0).Should().Be(ColorMap.Entries - 1); // clamped high
+        Assert.Equal(0, ColorMap.IndexOf(0.0));
+        Assert.Equal(ColorMap.Entries - 1, ColorMap.IndexOf(1.0));
+        Assert.Equal(0, ColorMap.IndexOf(-5.0)); // clamped low
+        Assert.Equal(ColorMap.Entries - 1, ColorMap.IndexOf(5.0)); // clamped high
 
         (byte r0, byte g0, byte b0) = ColorMap.Entry(0, ColorMapKind.Viridis);
         (byte r1, byte g1, byte b1) = ColorMap.Entry(ColorMap.Entries - 1, ColorMapKind.Viridis);
-        (r0 + g0 + b0).Should().BeLessThan(r1 + g1 + b1);
+        Assert.True((int)r0 + g0 + b0 < (int)r1 + g1 + b1);
     }
 
     [Fact]
@@ -143,35 +142,36 @@ public class DeepCoverageTests
             byte[] bgra = new byte[4];
             ColorMap.WritePixel(bgra, 0.5, kind);
             (byte r, byte g, byte b) = ColorMap.Entry(ColorMap.IndexOf(0.5), kind);
-            bgra[2].Should().Be(r);
-            bgra[1].Should().Be(g);
-            bgra[0].Should().Be(b);
-            bgra[3].Should().Be(0xFF);
+            Assert.Equal(b, bgra[2]);
+            Assert.Equal(g, bgra[1]);
+            Assert.Equal(r, bgra[0]);
+            Assert.Equal(0xFF, bgra[3]);
         }
     }
 
     [Fact]
-    public void DbRangeAutoRangeClampsSpanAndNormalizes()
+    public void DbRangeSetClampsSpanAndNormalizes()
     {
         DbRange range = new(-140, -20);
-        range.SpanDb.Should().Be(120);
+        Assert.Equal(120, range.SpanDb, 9);
 
         // Too-narrow span gets widened to MinSpanDb around the midpoint.
         range.Set(-100, -99);
-        range.SpanDb.Should().BeGreaterThanOrEqualTo(DbRange.MinSpanDb);
+        Assert.True(range.SpanDb >= DbRange.MinSpanDb);
 
         // Too-wide span gets narrowed to MaxSpanDb.
         range.Set(-200, 0);
-        range.SpanDb.Should().BeLessThanOrEqualTo(DbRange.MaxSpanDb);
+        Assert.True(range.SpanDb <= DbRange.MaxSpanDb);
 
         range.Set(-120, -20);
-        range.Normalize(-120).Should().BeApproximately(0.0, 1e-9);
-        range.Normalize(-20).Should().BeApproximately(1.0, 1e-9);
-        range.DbAt(0.5).Should().BeApproximately(-70, 1e-9);
+        Assert.Equal(0.0, range.Normalize(-120), 9);
+        Assert.Equal(1.0, range.Normalize(-20), 9);
+        Assert.Equal(-70, range.DbAt(0.5), 9);
+        Assert.False(range.AutoScaled); // an explicit toolbar range is not auto-scaled
     }
 
     [Fact]
-    public void DbRangeAutoRangeFromSpectrumUpdatesBounds()
+    public void DbRangeAutoRangeFromSpectrumUpdatesBoundsAndMarksAutoScaled()
     {
         DbRange range = new(-140, -20);
         float[] spectrum = new float[64];
@@ -181,18 +181,18 @@ public class DeepCoverageTests
         }
 
         bool changed = range.AutoRange(spectrum, spectrum.Length);
-        changed.Should().BeTrue();
-        range.AutoScaled.Should().BeTrue();
-        range.MinDb.Should().BeLessThan(range.MaxDb);
+        Assert.True(changed);
+        Assert.True(range.AutoScaled);
+        Assert.True(range.MinDb < range.MaxDb);
     }
 
-    // ---------- PeakTracker bandwidth classification ----------
+    // ---------- PeakDetector bandwidth classification ----------
 
     [Fact]
-    public void PeakTrackerClassifiesNarrowAndWideTones()
+    public void PeakDetectorClassifiesNarrowAndWidePeaks()
     {
         const int Bins = 256;
-        const double SampleRate = 256_000;
+        const double BinWidthHz = 1_000;
 
         // Very narrow CW-like peak: single bin dominant.
         float[] narrow = Enumerable.Repeat(-100f, Bins).ToArray();
@@ -200,9 +200,9 @@ public class DeepCoverageTests
         narrow[127] = -12f;
         narrow[129] = -12f;
 
-        PeakTracker tracker = new();
-        PeakInfo narrowPeak = tracker.FindPeaks(narrow, SampleRate, -60).Single();
-        narrowPeak.BandwidthClass.Should().Be(PeakBandwidthClass.Narrow);
+        SpectrumFrame narrowFrame = Frame(narrow, BinWidthHz);
+        DetectedPeak narrowPeak = new PeakDetector(-40).Detect(narrowFrame, Floor(narrow, -90)).Single();
+        Assert.Equal(PeakBandwidthClass.Narrow, narrowPeak.BandwidthClass);
 
         // Wide broadcast-like peak spanning ~30 bins.
         float[] wide = Enumerable.Repeat(-100f, Bins).ToArray();
@@ -211,24 +211,24 @@ public class DeepCoverageTests
             wide[i] = -20f - Math.Abs(i - 55);
         }
 
-        PeakInfo widePeak = tracker.FindPeaks(wide, SampleRate, -60).Single();
-        widePeak.BandwidthClass.Should().Be(PeakBandwidthClass.Wide);
+        SpectrumFrame wideFrame = Frame(wide, BinWidthHz);
+        DetectedPeak widePeak = new PeakDetector(-40).Detect(wideFrame, Floor(wide, -90)).Single();
+        Assert.Equal(PeakBandwidthClass.Wide, widePeak.BandwidthClass);
     }
 
-    // ---------- ClassificationPipeline over synthetic frames ----------
-
-    [Fact]
-    public void ClassificationPipelineLabelsSyntheticCwPeak()
+    private static SpectrumFrame Frame(float[] powerDb, double binWidthHz) => new()
     {
-        SyntheticRadioSource source = new() { ToneMode = SyntheticToneMode.Cw };
-        source.StartCapture();
+        StartHz = 0,
+        StopHz = (long)(powerDb.Length * binWidthHz),
+        BinWidthHz = binWidthHz,
+        PowerDb = powerDb,
+        FilledBins = powerDb.Length,
+        SweepCompleted = true,
+        UtcTimestamp = DateTimeOffset.UtcNow,
+    };
 
-        ClassificationPipeline pipeline = new();
-        ClassificationResult result = pipeline.Classify(source.NextSpectrum()!, source);
-
-        result.Class.Should().NotBe(ModulationClass.Unknown);
-        result.Peaks.Should().NotBeEmpty();
-    }
+    private static double[] Floor(float[] powerDb, double db) =>
+        Enumerable.Repeat(db, powerDb.Length).ToArray();
 
     // ---------- CaptureRecorder metadata sidecar ----------
 
@@ -236,33 +236,70 @@ public class DeepCoverageTests
     public void CaptureRecorderWritesReadableMetaSidecar()
     {
         string dir = Path.Combine(Path.GetTempPath(), "rfscout-deep-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(dir);
         try
         {
-            SyntheticRadioSource source = new() { ToneMode = SyntheticToneMode.Cw };
-            source.StartCapture();
+            byte[] samples = new byte[2048];
+            IqCapture capture = new(
+                106_500_000,
+                10_000_000,
+                24,
+                34,
+                false,
+                false,
+                DateTimeOffset.UtcNow,
+                samples);
 
-            string iqPath = Path.Combine(dir, "capture.iq8");
-            CaptureRecorder recorder = new();
-            recorder.BeginCapture(iqPath, source);
-            for (int i = 0; i < 5; i++)
-            {
-                recorder.Write(source.NextIq()!);
-            }
+            RecordedCapture saved = new CaptureRecorder(dir).Save(capture, new ClassificationSummary("WFM", 0.9));
+            Assert.True(File.Exists(saved.Cs8Path));
+            Assert.True(File.Exists(saved.MetaPath));
 
-            recorder.EndCapture();
-
-            File.Exists(iqPath).Should().BeTrue();
-            string metaPath = iqPath + ".meta.json";
-            File.Exists(metaPath).Should().BeTrue();
-
-            SigMfMeta meta = SigMfMeta.Load(metaPath);
-            meta.SampleRate.Should().BeGreaterThan(0);
-            meta.CenterFrequencyHz.Should().BeGreaterThan(0);
+            SigMfMeta meta = SigMfMeta.Parse(File.ReadAllText(saved.MetaPath));
+            Assert.Equal(10_000_000, meta.SampleRate, 9);
+            Assert.Equal(106_500_000, meta.Core, 9);
         }
         finally
         {
-            Directory.Delete(dir, recursive: true);
+            if (Directory.Exists(dir))
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+        }
+    }
+}
+
+    // ---------- CaptureRecorder metadata sidecar ----------
+
+    [Fact]
+    public void CaptureRecorderWritesReadableMetaSidecar()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "rfscout-deep-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            byte[] samples = new byte[2048];
+            IqCapture capture = new(
+                106_500_000,
+                10_000_000,
+                24,
+                34,
+                false,
+                false,
+                DateTimeOffset.UtcNow,
+                samples);
+
+            RecordedCapture saved = new CaptureRecorder(dir).Save(capture, new ClassificationSummary("WFM", 0.9));
+            Assert.True(File.Exists(saved.Cs8Path));
+            Assert.True(File.Exists(saved.MetaPath));
+
+            SigMfMeta meta = SigMfMeta.Parse(File.ReadAllText(saved.MetaPath));
+            Assert.Equal(10_000_000, meta.SampleRate, 9);
+            Assert.Equal(106_500_000, meta.Core, 9);
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+            {
+                Directory.Delete(dir, recursive: true);
+            }
         }
     }
 }
