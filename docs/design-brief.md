@@ -69,8 +69,37 @@ radio) are classified — band, modulation, bandwidth, burst pattern — because
 cannot be read, not because a policy forbids reading it. RfScout never decrypts and never
 transmits. The README and About box state this.
 
+## M6 additions (settings, export, unplug, status bar)
+
+- **Settings**: per-user `%LOCALAPPDATA%\RfScout\settings.json` holds the last span, bin width,
+  gains, peak threshold, colour map, region and waterfall dB window. A missing, unreadable,
+  oversized (>64 KiB) or corrupt file falls back to defaults; the corrupt file is renamed
+  `settings.json.bad` once. Values are clamped to the UI ranges on load. Saved on window close,
+  loaded at startup.
+- **Export**: File > Export writes the peak table and the identification table as CSV
+  (two sheets worth of rows, CRLF, RFC 4180) or as one JSON document with both arrays.
+  Spreadsheet formula injection is guarded: any cell whose first printable character is
+  `=`, `+`, `-` or `@` is prefixed with a single quote, because decoder text (rtl_433 model
+  names, RDS PS names, ICAO/callsign strings) arrives over the air.
+- **Unplug handling**: an `UnplugMonitor` polls the declared HackRF vid:pid (from the DevFlow
+  device declaration, never a hard-coded id) every 2 s. Watching -> Lost fires the banner and
+  stops sweeping; Lost -> ReconnectReady clears the banner and restarts; a source that reports
+  `Stopped(deviceLost: true)` raises the same banner. The state machine is unit-tested against
+  a fake bus probe.
+- **Status bar**: device serial (short form), sample rate, sweeps/s, dropped blocks and
+  process CPU percent, refreshed on the UI timer.
+- **Performance**: the DSP pipeline (s8 IQ -> FFT -> grid -> floor -> peaks -> tracks) is gated
+  by a synthetic 20 Msps test; Debug-config runs measure ~6 Msps on the dev laptop, Release
+  builds meet the floor (see the M6 report).
+- **Mute (gap review)**: the peak table gained a Mute checkbox column. A muted emitter keeps its
+  row but renders greyed out, a "N muted" counter sits beside the filter box, Locate refuses to
+  start on a muted peak (the status line explains why), and the JSON export carries a per-peak
+  `muted` flag so a re-imported session keeps the silenced set. The CSV gains no column: muting
+  is operator state, not an observation.
+
 ## Open questions
 - The development antenna is a short whip: weak below 30 MHz. Live identification tests
   log what they see rather than failing on an empty sky.
 - rtl_433 is an external process; if it is absent the ISM path degrades to pulse-timing
   classification only.
+

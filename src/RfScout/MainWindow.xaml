@@ -8,6 +8,9 @@
   <Window.DataContext>
     <vm:MainViewModel />
   </Window.DataContext>
+  <Window.Resources>
+    <BooleanToVisibilityConverter x:Key="BoolToVis" />
+  </Window.Resources>
   <Grid Margin="24">
     <Grid.ColumnDefinitions>
       <ColumnDefinition Width="*" />
@@ -15,10 +18,19 @@
     </Grid.ColumnDefinitions>
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
       <RowDefinition Height="*" />
+      <RowDefinition Height="Auto" />
     </Grid.RowDefinitions>
+    <!-- M6 unplug banner: visible while the HackRF is missing, announced politely. -->
+    <Border Grid.Row="1" Margin="0,8,0,0" Padding="8" Background="#B8860B" CornerRadius="4"
+            Visibility="{Binding DeviceLostBanner, Converter={StaticResource BoolToVis}}"
+            AutomationProperties.Name="Device unplugged banner"
+            AutomationProperties.LiveSetting="Assertive">
+      <TextBlock Text="{Binding BannerText}" TextWrapping="Wrap" Foreground="White" FontWeight="Bold" />
+    </Border>
     <TextBlock FontSize="20" Text="{Binding Title}" AutomationProperties.HeadingLevel="Level1" />
-<TextBlock Grid.Row="1" Margin="0,16,0,0" FontSize="14" TextWrapping="Wrap"
+<TextBlock Grid.Row="2" Margin="0,16,0,0" FontSize="14" TextWrapping="Wrap"
                Text="{Binding StatusText}" AutomationProperties.Name="Status"
                AutomationProperties.LiveSetting="Polite" />
 
@@ -41,11 +53,16 @@
         <Label Target="PeakFilterBox" Content="Filter" />
         <TextBox x:Name="PeakFilterBox" Width="140" Text="{Binding PeakFilterText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                  AutomationProperties.Name="Filter peaks by frequency, band, type or guess" />
+        <!-- Muted peaks stay in the table greyed out, so say how many there are. -->
+        <TextBlock Margin="12,0,0,0" VerticalAlignment="Center" FontSize="12"
+                   Text="{Binding MutedPeakCount, StringFormat={}{0} muted}"
+                   AutomationProperties.Name="Muted peak count"
+                   AutomationProperties.LiveSetting="Polite" />
       </StackPanel>
     </StackPanel>
 
-    <DataGrid Grid.Row="1" Grid.Column="0" x:Name="PeakTable" Margin="0,16,16,0"
-              AutoGenerateColumns="False" IsReadOnly="True" CanUserSortColumns="True"
+    <DataGrid Grid.Row="2" Grid.Column="0" x:Name="PeakTable" Margin="0,16,16,0"
+              AutoGenerateColumns="False" CanUserSortColumns="True"
               SelectionMode="Single" SelectionUnit="FullRow"
               ItemsSource="{Binding PeakRows}"
               SelectedItem="{Binding SelectedPeak, Mode=TwoWay}"
@@ -65,15 +82,26 @@
         <DataGridTextColumn Header="Best guess" Binding="{Binding BestGuess}" Width="220" />
         <DataGridTextColumn Header="Conf" Binding="{Binding ConfidenceText}" Width="56" />
         <DataGridTextColumn Header="Last seen" Binding="{Binding LastSeenText}" Width="88" />
+        <DataGridCheckBoxColumn Header="Mute" Binding="{Binding IsMuted, UpdateSourceTrigger=PropertyChanged}" Width="48" />
       </DataGrid.Columns>
+      <DataGrid.RowStyle>
+        <!-- A muted emitter stays in the table but reads as silenced. -->
+        <Style TargetType="DataGridRow">
+          <Style.Triggers>
+            <DataTrigger Binding="{Binding IsMuted}" Value="True">
+              <Setter Property="Opacity" Value="0.45" />
+            </DataTrigger>
+          </Style.Triggers>
+        </Style>
+      </DataGrid.RowStyle>
     </DataGrid>
 
-    <TextBlock Grid.Row="1" Grid.Column="1" Margin="0,0,0,0" VerticalAlignment="Bottom"
+    <TextBlock Grid.Row="2" Grid.Column="1" Margin="0,0,0,0" VerticalAlignment="Bottom"
                FontSize="12" TextWrapping="Wrap" MaxWidth="260"
                Text="{Binding SelectedPeakText}" AutomationProperties.Name="Selected peak"
                AutomationProperties.LiveSetting="Polite" />
 
-    <ContentControl x:Name="WaterfallHost" Grid.Row="1" Grid.Column="1" Width="260" Margin="16,16,0,0"
+    <ContentControl x:Name="WaterfallHost" Grid.Row="2" Grid.Column="1" Width="260" Margin="16,16,0,0"
                     AutomationProperties.Name="Waterfall plot"
                     AutomationProperties.HelpText="Scrolling waterfall of recent sweeps">
       <ctl:SpectrumGrid x:Name="Waterfall" ProbeRequested="OnWaterfallProbe" />
@@ -81,7 +109,7 @@
 
     <!-- M5 locate overlay: covers the waterfall while locate owns the radio, so the
          operator sees the strength view, not stale sweep rows. -->
-    <Border x:Name="LocatePanel" Grid.Row="1" Grid.Column="1" Width="260" Margin="16,16,0,0"
+    <Border x:Name="LocatePanel" Grid.Row="2" Grid.Column="1" Width="260" Margin="16,16,0,0"
             Background="{DynamicResource {x:Static SystemColors.WindowBrushKey}}"
             BorderBrush="{DynamicResource {x:Static SystemColors.ActiveBorderBrushKey}}"
             BorderThickness="1" Visibility="Collapsed"
@@ -122,6 +150,35 @@
                 AutomationProperties.Name="Exit locate and resume sweeping" />
       </StackPanel>
     </Border>
+
+    <!-- M6 status bar: device serial and firmware, sample rate, sweeps/s, dropped blocks,
+         process CPU, and the CSV/JSON export buttons. -->
+    <Grid Grid.Row="3" Grid.ColumnSpan="2" Margin="0,12,0,0">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="*" />
+        <ColumnDefinition Width="Auto" />
+      </Grid.ColumnDefinitions>
+      <StackPanel Grid.Column="0" Orientation="Vertical">
+        <TextBlock Text="{Binding DeviceText}" FontSize="12" TextWrapping="Wrap"
+                   AutomationProperties.Name="Device serial and firmware" />
+        <TextBlock Text="{Binding StatsText}" FontSize="12" TextWrapping="Wrap"
+                   AutomationProperties.Name="Sample rate, sweeps per second, dropped blocks, CPU"
+                   AutomationProperties.LiveSetting="Off" />
+      </StackPanel>
+      <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Bottom"
+                  AutomationProperties.Name="Export controls">
+        <TextBlock Text="{Binding ExportStatusText}" FontSize="11" TextWrapping="Wrap" MaxWidth="240"
+                   VerticalAlignment="Center" Margin="0,0,8,0"
+                   AutomationProperties.Name="Export result"
+                   AutomationProperties.LiveSetting="Polite" />
+        <Button Content="Export CSV" Command="{Binding ExportCsvCommand}" Margin="0,0,8,0"
+                AutomationProperties.Name="Export peak table and identifications to CSV"
+                AutomationProperties.HelpText="Writes a timestamped CSV file beside the settings file. Formula-injection guarded." />
+        <Button Content="Export JSON" Command="{Binding ExportJsonCommand}"
+                AutomationProperties.Name="Export peak table and identifications to JSON"
+                AutomationProperties.HelpText="Writes a timestamped JSON file beside the settings file." />
+      </StackPanel>
+    </Grid>
   </Grid>
 </Window>
 
