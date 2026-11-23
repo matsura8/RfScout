@@ -1360,7 +1360,20 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             _waterfallHelp = PlotReadout.SpanSummary(latest);
             RefreshStatsLocked();
 
+            // QA defect 1: the label above the plot showed "No sweep yet" while a live sweep was
+            // already filling the grid. The label is HoverText, which only ever came from pointer
+            // moves; refresh it from the newest frame so it tracks the sweep state on its own.
+            if (_hoverText is "No sweep yet" or "Sweeping" or "Sweep running"
+                || _hoverText.StartsWith("Sweeping ", StringComparison.Ordinal))
+            {
+                _hoverText = latest.SweepCompleted
+                    ? _spectrumHelp
+                    : "Sweeping " + Core.Display.FrequencyFormat.MHz(latest.StartHz)
+                        + " to " + Core.Display.FrequencyFormat.MHz(latest.StopHz);
+            }
+
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SpectrumHelp)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HoverText)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(WaterfallHelp)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DbMinText)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DbMaxText)));
@@ -1375,6 +1388,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     {
         if (_frames.TryGetSnapshot(out SpectrumFrame? frame, out _) && frame is not null)
         {
+            // AutoRange marks the range auto-scaled, which is what lets the plot's dB axis
+            // follow the display range instead of the fixed -160 floor (QA defect 3).
             _dbRange.AutoRange(frame.PowerDb, frame.FilledBins);
             lock (_gate)
             {
@@ -2592,7 +2607,12 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         // M6 status bar: sample rate, sweeps/s, dropped blocks and process CPU. The serial is
         // carried by DeviceText, which Start() and the unplug watcher set together with it.
         InitCpuTrackerLocked();
-        double cpu = _cpuTracker!.ReadPercent();
+        // QA defect 2: the status bar read "CPU 153929%". The tracker already divides CPU time by
+        // wall time, but it must also divide by the processor count, and it must not be re-armed
+        // every refresh (that made the window one paint long and amplified the cost of this call).
+        double cpu = _cpuTracker!.ReadPercent() / Environment.ProcessorCount;
+        // BinWidth already appends " MHz"/" kHz", so the unit text is just "sps"; adding "s"
+        // here produced "20.00 MHzsps" on air (QA status-bar polish).
         string rate = stats.SamplesPerSecond > 0
             ? FrequencyFormat.BinWidth(stats.SamplesPerSecond) + "sps"
             : "idle";
@@ -3104,6 +3124,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 
     private void InitCpuTrackerLocked()
     {
+        // Created once per view model. Re-creating it per status refresh reset the baseline every
+        // time, so the percent was measured over a near-zero window and read absurdly high.
         _cpuTracker ??= new ProcessCpuTracker();
     }
 

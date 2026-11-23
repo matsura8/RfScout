@@ -191,6 +191,73 @@ public sealed class DisplayLayerTests
         Assert.True(range.SpanDb <= DbRange.MaxSpanDb, $"span {range.SpanDb:F1} dB");
     }
 
+    // ---- QA defect 3: the plot's dB axis must follow the display range while auto-ranging ----
+
+    [Fact]
+    public void AutoRangeMarksTheRangeAutoScaledAndSetClearsIt()
+    {
+        var range = new DbRange(-140, -20);
+        Assert.False(range.AutoScaled);
+        float[] bins = Enumerable.Range(0, 200).Select(i => -95f + (i % 30)).Select(v => (float)v).ToArray();
+        Assert.True(range.AutoRange(bins, bins.Length));
+        Assert.True(range.AutoScaled, "AutoRange must mark the range auto-scaled");
+        range.Set(-120, -30);
+        Assert.False(range.AutoScaled, "an explicit toolbar range is not auto-scaled");
+    }
+
+    [Fact]
+    public void PlotModelBottomFollowsTheAutoRangeAndStaysFixedOtherwise()
+    {
+        float[] power = [-50f, -45f, -40f, -38f];
+        SpectrumFrame frame = new()
+        {
+            StartHz = 88_000_000,
+            StopHz = 88_050_000,
+            BinWidthHz = 12_500,
+            PowerDb = power,
+            FilledBins = power.Length,
+            SweepCompleted = true,
+            UtcTimestamp = DateTimeOffset.UnixEpoch,
+        };
+        var view = new SpectrumViewport(frame.StartHz, frame.StopHz);
+
+        // Explicit toolbar range: the fixed -160 dBFS floor keeps trace heights stable.
+        var manual = new DbRange(-140, -20);
+        SpectrumPlotModel fixedModel = SpectrumPlotModel.Build(frame, frame, [], view, manual);
+        Assert.Equal(SpectrumPlotModel.BottomDb, fixedModel.BottomDbValue);
+
+        // Auto-ranged: the axis must read the display range (eg -59..-38), not -160..-40.
+        // Four bins are too few for AutoRange's "nothing to judge" guard, so use a realistic
+        // floor-plus-signals grid like the AutoRange tests do.
+        float[] bins = new float[512];
+        for (int i = 0; i < bins.Length; i++)
+        {
+            bins[i] = -59f + (i % 21);
+        }
+
+        var auto = new DbRange(-140, -20);
+        Assert.True(auto.AutoRange(bins, bins.Length));
+        SpectrumFrame wide = new()
+        {
+            StartHz = 88_000_000,
+            StopHz = 88_000_000 + (bins.Length * 12_500),
+            BinWidthHz = 12_500,
+            PowerDb = bins,
+            FilledBins = bins.Length,
+            SweepCompleted = true,
+            UtcTimestamp = DateTimeOffset.UnixEpoch,
+        };
+        var wideView = new SpectrumViewport(wide.StartHz, wide.StopHz);
+        SpectrumPlotModel autoModel = SpectrumPlotModel.Build(wide, wide, [], wideView, auto);
+        Assert.Equal(auto.MinDb, autoModel.BottomDbValue, 3);
+        Assert.Equal(auto.MaxDb, autoModel.TopDb, 3);
+        Assert.True(autoModel.BottomDbValue > -100, "the auto axis bottom must follow the data, not the fixed floor");
+
+        // The hover readout uses the same axis: mid-height reads mid-range, not -100.
+        double mid = autoModel.DbAtHeight(0.5);
+        Assert.True(Math.Abs(mid - ((auto.MinDb + auto.MaxDb) / 2)) < 1.0, $"mid-height read {mid:F1} dB");
+    }
+
     // ---- viewport ----
 
     [Fact]
