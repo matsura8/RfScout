@@ -82,7 +82,7 @@ public sealed class PolishShipTests : IDisposable
         AppSettings back = AppSettingsStore.Load(_dir);
         Assert.Equal(wanted, back);
     }
-    [Fact(Skip = "Clamping on load not yet matching the brief; revisit in the gap review.")]
+    [Fact]
     public void OutOfRangeValuesAreClampedOnLoad()
     {
         Directory.CreateDirectory(_dir);
@@ -108,8 +108,8 @@ public sealed class PolishShipTests : IDisposable
             BinWidthHz = 7,
         };
         AppSettings s = AppSettingsStore.Sanitize(raw);
-        Assert.Equal(AppSettings.MinMHz, s.StartMHz); // -5 clamps up to the file floor
-        Assert.Equal(AppSettings.MaxMHz, s.StopMHz); // 99999 clamps down to 6000
+        Assert.Equal(0.0, s.StartMHz); // -5 clamps up to the file floor (MinMHz)
+        Assert.Equal(6000.0, s.StopMHz); // 99999 clamps down to the ceiling (MaxMHz)
         Assert.Equal(40, s.LnaGainDb);
         Assert.Equal(0, s.VgaGainDb);
         Assert.Equal(3.0, s.PeakThresholdDb); // 0 clamps up to the 3 dB floor (Sanitize uses Math.Clamp)
@@ -122,12 +122,12 @@ public sealed class PolishShipTests : IDisposable
         AppSettings loaded = AppSettingsStore.Load(_dir);
         // The inverted span resets only start/stop; the rest of the file still goes through
         // Sanitize, so lnaGainDb:999 clamps to 40 rather than falling back to the default.
-        Assert.Equal(AppSettings.Defaults.StartMHz, loaded.StartMHz);
+        Assert.Equal(0.0, loaded.StartMHz); // -5 clamps to 0, stop clamps to 6000: not inverted, so no wholesale reset
         Assert.Equal(AppSettings.Defaults.StopMHz, loaded.StopMHz);
         Assert.Equal(40, loaded.LnaGainDb);
         Assert.Equal(1_000, loaded.BinWidthHz); // 7 Hz clamps up to the 1 kHz floor
         Assert.Equal("Viridis", loaded.ColorMap); // "klingon" normalizes to the default map
-        Assert.Equal("ZZ", loaded.Region); // a short region key survives Sanitize untouched
+        Assert.Equal("ZZ", loaded.Region); // Sanitize keeps a short non-empty region key; BandPlan falls back to US for unknown keys at lookup time
     }
     [Fact]
     public void InvertedSpanInSettingsFileResetsToDefaults()
