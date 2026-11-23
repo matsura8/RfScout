@@ -18,9 +18,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The SDK comes from global.json, so CI builds with the same compiler and analyzers as a
+      # local build; bump global.json to move both at once.
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: "10.0.x"
+          global-json-file: global.json
 
       - name: Restore
         run: dotnet restore
