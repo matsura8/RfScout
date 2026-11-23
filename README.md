@@ -168,12 +168,10 @@ learning, so every label comes with the features that decided it.
   a single sample and the decoder's edge timing cannot resolve them; the callsign and airborne
   position frames decode only after a proper pulse resampler, which is deferred. The CRC and ICAO
   paths are still covered.
-- **One settings-clamping test is skipped.** A hand-written settings file with an inverted span
-  plus out-of-range fields does not yet clamp exactly as intended; the store falls back safely,
-  but the exact per-field behaviour is still being settled.
 - **The 20 Msps performance test is skipped in debug builds.** The DSP pipeline sustains about
-  6 Msps when the test runs against a debug build of the app; the 20 Msps real-time floor is met
-  in release builds, which the test suite does not build. The unplug-and-replug check is likewise
+  6 Msps when the test runs against a debug build of the app; measured in a release build it
+  sustains 31.9 Msps, above the 20 Msps real-time floor, and the test passes when run in
+  release. The unplug-and-replug check is likewise
   written up as a manual test — nobody could pull the plug during development.
 - **Display gaps.** There is no cursor readout or marker overlay on the plot yet. Mouse zoom and
   pan exist in the viewport model but are not yet wired to the control. The waterfall palette
