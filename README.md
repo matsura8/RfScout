@@ -195,14 +195,22 @@ Issues and pull requests are welcome. Before opening a PR, run the three command
 [Tests and checks](#tests-and-checks), and add tests for new logic in `Core`. The PR template has
 the full checklist. Report security problems privately, as described in [SECURITY.md](SECURITY.md).
 
+## Microsoft Store
+
+RfScout is packaged for the Microsoft Store as a full-trust MSIX. The package identity, listing text
+and screenshots are in [`store/`](store), and the privacy policy is [PRIVACY.md](PRIVACY.md). The
+Store version needs the same WinUSB driver as the plain build (see [Requirements](#requirements)),
+because the Store cannot install drivers.
+
 ## License
 
-No license has been chosen for RfScout's own code yet, so all rights are reserved for now.
+RfScout is free software: you can redistribute it and/or modify it under the terms of the
+[GNU General Public License](LICENSE) as published by the Free Software Foundation, either
+version 3 of the License, or (at your option) any later version (SPDX: `GPL-3.0-or-later`).
+It comes with no warranty.
 
-The binaries in `native/x64` are third-party software under their own licenses:
-libhackrf (BSD-3-Clause) and the HackRF tools (GPL-2.0-or-later), both from
-[greatscottgadgets/hackrf v2026.01.3](https://github.com/greatscottgadgets/hackrf/tree/v2026.01.3),
-libusb (LGPL-2.1-or-later) and pthreads4w (Apache-2.0).
-
-
-
+RfScout ships third-party components under their own licenses: libhackrf (BSD-3-Clause),
+libusb (LGPL-2.1-or-later), pthreads4w (Apache-2.0), rtl_433 and librtlsdr (GPL-2.0-or-later),
+SoapySDR (BSL-1.0) and the .NET runtime (MIT). All of them are compatible with
+GPL-3.0-or-later. Versions, sources and license texts are listed in
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
