@@ -3,158 +3,264 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:ctl="clr-namespace:RfScout.Controls"
         xmlns:vm="clr-namespace:RfScout.ViewModels"
-        Title="{Binding Title}" Width="640" Height="400" MinWidth="360" MinHeight="240"
-        Icon="pack://application:,,,/Assets/rfscout.ico"
+        Title="{Binding Title}" Width="1280" Height="820" MinWidth="960" MinHeight="640"
+        Icon="pack://application:,,,/RfScout;component/Assets/rfscout.ico"
         WindowStartupLocation="CenterScreen">
   <Window.DataContext>
     <vm:MainViewModel />
   </Window.DataContext>
   <Window.Resources>
     <BooleanToVisibilityConverter x:Key="BoolToVis" />
+    <Style x:Key="Group" TargetType="StackPanel">
+      <Setter Property="Orientation" Value="Horizontal" />
+      <Setter Property="Margin" Value="0,0,16,6" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
   </Window.Resources>
-  <Grid Margin="24">
-    <Grid.ColumnDefinitions>
-      <ColumnDefinition Width="*" />
-      <ColumnDefinition Width="Auto" />
-    </Grid.ColumnDefinitions>
+  <Grid Margin="12">
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto" />
       <RowDefinition Height="Auto" />
       <RowDefinition Height="*" />
       <RowDefinition Height="Auto" />
     </Grid.RowDefinitions>
+
+    <!-- Sweep toolbar: source, span, resolution, gains, RF switches and the display range. -->
+    <WrapPanel Grid.Row="0" AutomationProperties.Name="Sweep controls">
+      <StackPanel Style="{StaticResource Group}">
+        <Button Content="_Start" Command="{Binding StartCommand}" Width="72" Margin="0,0,6,0"
+                AutomationProperties.HelpText="Open the radio and start sweeping. Shortcut: Space." />
+        <Button Content="S_top" Command="{Binding StopCommand}" Width="72"
+                AutomationProperties.HelpText="Stop sweeping and release the radio. Shortcut: Space." />
+      </StackPanel>
+      <StackPanel Style="{StaticResource Group}">
+        <Label Content="Sour_ce" Target="{Binding ElementName=SourceBox}" />
+        <ComboBox x:Name="SourceBox" Width="100" SelectedItem="{Binding SourceKind}"
+                  AutomationProperties.Name="Radio source"
+                  AutomationProperties.HelpText="HackRf uses the radio; Synthetic is a built-in demo signal." />
+      </StackPanel>
+      <StackPanel Style="{StaticResource Group}">
+        <Label Content="_Preset" Target="{Binding ElementName=PresetBox}" />
+        <ComboBox x:Name="PresetBox" Width="190" DisplayMemberPath="Name"
+                  ItemsSource="{x:Static vm:MainViewModel.Presets}" SelectedItem="{Binding SelectedPreset}"
+                  AutomationProperties.Name="Band preset" />
+      </StackPanel>
+      <StackPanel Style="{StaticResource Group}">
+        <Label Content="Start MHz" Target="{Binding ElementName=StartBox}" />
+        <TextBox x:Name="StartBox" Width="80" VerticalContentAlignment="Center" Text="{Binding StartMHzText}"
+                 AutomationProperties.Name="Start frequency in MHz" />
+        <Label Content="Stop MHz" Target="{Binding ElementName=StopBox}" Margin="6,0,0,0" />
+        <TextBox x:Name="StopBox" Width="80" VerticalContentAlignment="Center" Text="{Binding StopMHzText}"
+                 AutomationProperties.Name="Stop frequency in MHz" />
+      </StackPanel>
+      <StackPanel Style="{StaticResource Group}">
+        <Label Content="Bin" Target="{Binding ElementName=BinBox}" />
+        <ComboBox x:Name="BinBox" Width="110" ItemStringFormat="{}{0:N0} Hz"
+                  ItemsSource="{x:Static vm:MainViewModel.BinWidthsHz}" SelectedItem="{Binding BinWidthHz}"
+                  AutomationProperties.Name="Bin width" />
+      </StackPanel>
+      <StackPanel Style="{StaticResource Group}">
+        <Label Content="LNA" Target="{Binding ElementName=LnaBox}" />
+        <ComboBox x:Name="LnaBox" Width="70" ItemStringFormat="{}{0} dB"
+                  ItemsSource="{x:Static vm:MainViewModel.LnaSteps}" SelectedItem="{Binding LnaDb}"
+                  AutomationProperties.Name="LNA gain" />
+        <Label Content="VGA" Target="{Binding ElementName=VgaBox}" Margin="6,0,0,0" />
+        <ComboBox x:Name="VgaBox" Width="70" ItemStringFormat="{}{0} dB"
+                  ItemsSource="{x:Static vm:MainViewModel.VgaSteps}" SelectedItem="{Binding VgaDb}"
+                  AutomationProperties.Name="VGA gain" />
+      </StackPanel>
+      <StackPanel Style="{StaticResource Group}">
+        <CheckBox Content="RF amp" IsChecked="{Binding RfAmp}" VerticalAlignment="Center" Margin="0,0,10,0"
+                  AutomationProperties.HelpText="14 dB RF amplifier. Off by default; asks for confirmation." />
+        <CheckBox Content="Antenna power" IsChecked="{Binding AntennaPower}" VerticalAlignment="Center"
+                  AutomationProperties.HelpText="Bias-tee power for an active antenna. Off by default; asks for confirmation." />
+      </StackPanel>
+      <StackPanel Style="{StaticResource Group}">
+        <Button Content="_Apply" Command="{Binding ApplyCommand}" Width="64"
+                AutomationProperties.HelpText="Apply the span and gain settings to the running sweep." />
+      </StackPanel>
+      <StackPanel Style="{StaticResource Group}">
+        <CheckBox Content="Auto range" IsChecked="{Binding AutoScale}" VerticalAlignment="Center" Margin="0,0,6,0" />
+        <Label Content="dB" />
+        <TextBox Width="42" VerticalContentAlignment="Center" Text="{Binding DbMinText}" AutomationProperties.Name="Display minimum dB" />
+        <TextBlock Text=" to " VerticalAlignment="Center" />
+        <TextBox Width="42" VerticalContentAlignment="Center" Text="{Binding DbMaxText}" AutomationProperties.Name="Display maximum dB" />
+        <Button Content="Clear hold" Command="{Binding ClearPeakHoldCommand}" Margin="8,0,0,0" />
+        <Button Content="Reset view" Command="{Binding ResetViewCommand}" Margin="6,0,0,0" />
+      </StackPanel>
+    </WrapPanel>
+
     <!-- M6 unplug banner: visible while the HackRF is missing, announced politely. -->
-    <Border Grid.Row="1" Margin="0,8,0,0" Padding="8" Background="#B8860B" CornerRadius="4"
+    <Border Grid.Row="1" Margin="0,4,0,4" Padding="8" Background="#B8860B" CornerRadius="4"
             Visibility="{Binding DeviceLostBanner, Converter={StaticResource BoolToVis}}"
             AutomationProperties.Name="Device unplugged banner"
             AutomationProperties.LiveSetting="Assertive">
       <TextBlock Text="{Binding BannerText}" TextWrapping="Wrap" Foreground="White" FontWeight="Bold" />
     </Border>
-    <TextBlock FontSize="20" Text="{Binding Title}" AutomationProperties.HeadingLevel="Level1" />
-<TextBlock Grid.Row="2" Margin="0,16,0,0" FontSize="14" TextWrapping="Wrap"
-               Text="{Binding StatusText}" AutomationProperties.Name="Status"
-               AutomationProperties.LiveSetting="Polite" />
 
-    <StackPanel Grid.Row="0" Grid.Column="1" Margin="16,0,0,0" Orientation="Vertical"
-                AutomationProperties.Name="Peak controls">
-      <StackPanel Orientation="Horizontal">
-        <Button Content="Locate" Command="{Binding LocatePeakCommand}" Margin="0,0,8,0"
-                AutomationProperties.Name="Locate the selected peak"
-                AutomationProperties.HelpText="Stop the sweep and stay tuned to the selected peak, showing live signal strength. Shortcut: L." />
-        <Button Content="Exit locate" Command="{Binding ExitLocateCommand}"
-                AutomationProperties.Name="Exit locate and resume sweeping"
-                AutomationProperties.HelpText="Leave locate and restart the sweep. Shortcut: Esc." />
-      </StackPanel>
-      <StackPanel Orientation="Horizontal">
-        <Label Target="PeakThresholdBox" Content="Threshold dB" />
-        <TextBox x:Name="PeakThresholdBox" Width="48" Text="{Binding PeakThresholdDb, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                 AutomationProperties.Name="Peak detection threshold in dB" />
-      </StackPanel>
-      <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
-        <Label Target="PeakFilterBox" Content="Filter" />
-        <TextBox x:Name="PeakFilterBox" Width="140" Text="{Binding PeakFilterText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                 AutomationProperties.Name="Filter peaks by frequency, band, type or guess" />
-        <!-- Muted peaks stay in the table greyed out, so say how many there are. -->
-        <TextBlock Margin="12,0,0,0" VerticalAlignment="Center" FontSize="12"
-                   Text="{Binding MutedPeakCount, StringFormat={}{0} muted}"
-                   AutomationProperties.Name="Muted peak count"
+    <Grid Grid.Row="2" Margin="0,6,0,0">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="*" />
+        <ColumnDefinition Width="340" />
+      </Grid.ColumnDefinitions>
+
+      <!-- Left: spectrum, waterfall, status and the peak table. -->
+      <Grid Grid.Column="0">
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto" />
+          <RowDefinition Height="3*" MinHeight="140" />
+          <RowDefinition Height="2*" MinHeight="90" />
+          <RowDefinition Height="Auto" />
+          <RowDefinition Height="2*" MinHeight="120" />
+        </Grid.RowDefinitions>
+        <TextBlock Grid.Row="0" Text="{Binding HoverText}" FontSize="12" Margin="0,0,0,2"
+                   AutomationProperties.Name="Spectrum readout" />
+        <ctl:SpectrumPlot Grid.Row="1" x:Name="Spectrum"
+                          AutomationProperties.Name="Spectrum plot"
+                          AutomationProperties.HelpText="{Binding SpectrumHelp}" />
+        <ContentControl x:Name="WaterfallHost" Grid.Row="2" Margin="0,4,0,0" Focusable="False"
+                        AutomationProperties.Name="Waterfall plot"
+                        AutomationProperties.HelpText="Scrolling waterfall of recent sweeps">
+          <ctl:SpectrumGrid x:Name="Waterfall" ProbeRequested="OnWaterfallProbe" />
+        </ContentControl>
+        <TextBlock Grid.Row="3" Margin="0,6,0,0" FontSize="13" TextWrapping="Wrap"
+                   Text="{Binding StatusText}" AutomationProperties.Name="Status"
                    AutomationProperties.LiveSetting="Polite" />
-      </StackPanel>
-    </StackPanel>
+        <DataGrid Grid.Row="4" x:Name="PeakTable" Margin="0,8,0,0"
+                  AutoGenerateColumns="False" CanUserSortColumns="True"
+                  SelectionMode="Single" SelectionUnit="FullRow"
+                  ItemsSource="{Binding PeakRows}"
+                  SelectedItem="{Binding SelectedPeak, Mode=TwoWay}"
+                  AutomationProperties.Name="Peak table"
+                  AutomationProperties.HelpText="Detected peaks. Use arrow keys to move between peaks; Enter analyzes the selected peak."
+                  PreviewKeyDown="OnPeakTableKeyDown"
+                  Sorting="OnPeakTableSorting">
+          <DataGrid.Columns>
+            <DataGridTextColumn Header="ID" Binding="{Binding Id}" Width="48" />
+            <DataGridTextColumn Header="Frequency" Binding="{Binding FrequencyText}" Width="140" />
+            <DataGridTextColumn Header="Power" Binding="{Binding PowerText}" Width="96" />
+            <DataGridTextColumn Header="SNR" Binding="{Binding SnrText}" Width="64" />
+            <DataGridTextColumn Header="BW" Binding="{Binding BandwidthText}" Width="80" />
+            <DataGridTextColumn Header="Duty" Binding="{Binding DutyText}" Width="56" />
+            <DataGridTextColumn Header="Type" Binding="{Binding Activity}" Width="96" />
+            <DataGridTextColumn Header="Band" Binding="{Binding Band}" Width="160" />
+            <DataGridTextColumn Header="Best guess" Binding="{Binding BestGuess}" Width="220" />
+            <DataGridTextColumn Header="Conf" Binding="{Binding ConfidenceText}" Width="56" />
+            <DataGridTextColumn Header="Last seen" Binding="{Binding LastSeenText}" Width="88" />
+            <DataGridCheckBoxColumn Header="Mute" Binding="{Binding IsMuted, UpdateSourceTrigger=PropertyChanged}" Width="48" />
+          </DataGrid.Columns>
+          <DataGrid.RowStyle>
+            <!-- A muted emitter stays in the table but reads as silenced. -->
+            <Style TargetType="DataGridRow">
+              <Style.Triggers>
+                <DataTrigger Binding="{Binding IsMuted}" Value="True">
+                  <Setter Property="Opacity" Value="0.45" />
+                </DataTrigger>
+              </Style.Triggers>
+            </Style>
+          </DataGrid.RowStyle>
+        </DataGrid>
+      </Grid>
 
-    <DataGrid Grid.Row="2" Grid.Column="0" x:Name="PeakTable" Margin="0,16,16,0"
-              AutoGenerateColumns="False" CanUserSortColumns="True"
-              SelectionMode="Single" SelectionUnit="FullRow"
-              ItemsSource="{Binding PeakRows}"
-              SelectedItem="{Binding SelectedPeak, Mode=TwoWay}"
-              AutomationProperties.Name="Peak table"
-              AutomationProperties.HelpText="Detected peaks. Use arrow keys to move between peaks; Enter analyzes the selected peak."
-              PreviewKeyDown="OnPeakTableKeyDown"
-              Sorting="OnPeakTableSorting">
-      <DataGrid.Columns>
-        <DataGridTextColumn Header="ID" Binding="{Binding Id}" Width="48" />
-        <DataGridTextColumn Header="Frequency" Binding="{Binding FrequencyText}" Width="140" />
-        <DataGridTextColumn Header="Power" Binding="{Binding PowerText}" Width="96" />
-        <DataGridTextColumn Header="SNR" Binding="{Binding SnrText}" Width="64" />
-        <DataGridTextColumn Header="BW" Binding="{Binding BandwidthText}" Width="80" />
-        <DataGridTextColumn Header="Duty" Binding="{Binding DutyText}" Width="56" />
-        <DataGridTextColumn Header="Type" Binding="{Binding Activity}" Width="96" />
-        <DataGridTextColumn Header="Band" Binding="{Binding Band}" Width="160" />
-        <DataGridTextColumn Header="Best guess" Binding="{Binding BestGuess}" Width="220" />
-        <DataGridTextColumn Header="Conf" Binding="{Binding ConfidenceText}" Width="56" />
-        <DataGridTextColumn Header="Last seen" Binding="{Binding LastSeenText}" Width="88" />
-        <DataGridCheckBoxColumn Header="Mute" Binding="{Binding IsMuted, UpdateSourceTrigger=PropertyChanged}" Width="48" />
-      </DataGrid.Columns>
-      <DataGrid.RowStyle>
-        <!-- A muted emitter stays in the table but reads as silenced. -->
-        <Style TargetType="DataGridRow">
-          <Style.Triggers>
-            <DataTrigger Binding="{Binding IsMuted}" Value="True">
-              <Setter Property="Opacity" Value="0.45" />
-            </DataTrigger>
-          </Style.Triggers>
-        </Style>
-      </DataGrid.RowStyle>
-    </DataGrid>
+      <!-- Right: peak controls, analysis of the selected peak, and the locate view on top. -->
+      <Grid Grid.Column="1" Margin="12,0,0,0">
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+          <StackPanel>
+            <StackPanel Orientation="Vertical"
+                        AutomationProperties.Name="Peak controls">
+              <StackPanel Orientation="Horizontal">
+                <Button Content="Locate" Command="{Binding LocatePeakCommand}" Margin="0,0,8,0"
+                        AutomationProperties.Name="Locate the selected peak"
+                        AutomationProperties.HelpText="Stop the sweep and stay tuned to the selected peak, showing live signal strength. Shortcut: L." />
+                <Button Content="Exit locate" Command="{Binding ExitLocateCommand}"
+                        AutomationProperties.Name="Exit locate and resume sweeping"
+                        AutomationProperties.HelpText="Leave locate and restart the sweep. Shortcut: Esc." />
+              </StackPanel>
+              <StackPanel Orientation="Horizontal">
+                <Label Target="PeakThresholdBox" Content="Threshold dB" />
+                <TextBox x:Name="PeakThresholdBox" Width="48" Text="{Binding PeakThresholdDb, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                         AutomationProperties.Name="Peak detection threshold in dB" />
+              </StackPanel>
+              <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                <Label Target="PeakFilterBox" Content="Filter" />
+                <TextBox x:Name="PeakFilterBox" Width="140" Text="{Binding PeakFilterText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                         AutomationProperties.Name="Filter peaks by frequency, band, type or guess" />
+                <!-- Muted peaks stay in the table greyed out, so say how many there are. -->
+                <TextBlock Margin="12,0,0,0" VerticalAlignment="Center" FontSize="12"
+                           Text="{Binding MutedPeakCount, StringFormat={}{0} muted}"
+                           AutomationProperties.Name="Muted peak count"
+                           AutomationProperties.LiveSetting="Polite" />
+              </StackPanel>
+            </StackPanel>
+            <TextBlock Text="Selected peak" FontSize="15" Margin="0,14,0,4" AutomationProperties.HeadingLevel="Level2" />
+            <TextBlock FontSize="12" TextWrapping="Wrap" Text="{Binding SelectedPeakText}"
+                       AutomationProperties.Name="Selected peak" AutomationProperties.LiveSetting="Polite" />
+            <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+              <Button Content="Analy_ze" Command="{Binding AnalyzePeakCommand}" Width="80"
+                      AutomationProperties.HelpText="Pause the sweep, capture the selected peak and classify it. Shortcut: Enter in the peak table." />
+              <CheckBox Content="Auto-analyze" IsChecked="{Binding AutoAnalyze}" VerticalAlignment="Center" Margin="10,0,0,0" />
+            </StackPanel>
+            <TextBlock Text="{Binding AnalyzeStatus}" FontSize="12" TextWrapping="Wrap" Margin="0,6,0,0" />
+            <TextBlock Text="{Binding ClassificationText}" FontSize="13" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,6,0,0"
+                       AutomationProperties.Name="Classification" />
+            <TextBlock Text="{Binding ReasonsText}" FontSize="12" TextWrapping="Wrap" Margin="0,4,0,0" AutomationProperties.Name="Classification reasons" />
+            <TextBlock Text="{Binding FeaturesText}" FontSize="12" TextWrapping="Wrap" Margin="0,4,0,0" AutomationProperties.Name="Measured features" />
+            <TextBlock Text="Decode log" FontSize="13" Margin="0,10,0,2" />
+            <TextBox Text="{Binding DecodeLogText, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap" MinHeight="60" MaxHeight="160"
+                     VerticalScrollBarVisibility="Auto" FontSize="11" AutomationProperties.Name="Decode log" />
+            <TextBlock Text="{Binding CapturePathText}" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,0" AutomationProperties.Name="Capture file" />
+          </StackPanel>
+        </ScrollViewer>
 
-    <TextBlock Grid.Row="2" Grid.Column="1" Margin="0,0,0,0" VerticalAlignment="Bottom"
-               FontSize="12" TextWrapping="Wrap" MaxWidth="260"
-               Text="{Binding SelectedPeakText}" AutomationProperties.Name="Selected peak"
-               AutomationProperties.LiveSetting="Polite" />
-
-    <ContentControl x:Name="WaterfallHost" Grid.Row="2" Grid.Column="1" Width="260" Margin="16,16,0,0"
-                    AutomationProperties.Name="Waterfall plot"
-                    AutomationProperties.HelpText="Scrolling waterfall of recent sweeps">
-      <ctl:SpectrumGrid x:Name="Waterfall" ProbeRequested="OnWaterfallProbe" />
-    </ContentControl>
-
-    <!-- M5 locate overlay: covers the waterfall while locate owns the radio, so the
-         operator sees the strength view, not stale sweep rows. -->
-    <Border x:Name="LocatePanel" Grid.Row="2" Grid.Column="1" Width="260" Margin="16,16,0,0"
-            Background="{DynamicResource {x:Static SystemColors.WindowBrushKey}}"
-            BorderBrush="{DynamicResource {x:Static SystemColors.ActiveBorderBrushKey}}"
-            BorderThickness="1" Visibility="Collapsed"
-            AutomationProperties.Name="Locate view"
-            AutomationProperties.HelpText="Live signal strength of the located peak: meter, 60 second graph, peak hold and tone.">
-      <StackPanel Margin="8">
-        <TextBlock Text="Locate" FontSize="16" AutomationProperties.HeadingLevel="Level2" />
-        <TextBlock x:Name="LocateFreqText" Text="{Binding SelectedPeakText}" TextWrapping="Wrap"
-                   Margin="0,4,0,0" AutomationProperties.Name="Located frequency" />
-        <TextBlock Text="{Binding LocateCurrentText}" FontSize="30" Margin="0,8,0,0"
-                   AutomationProperties.Name="Live signal strength meter"
-                   AutomationProperties.LiveSetting="Polite" />
-        <ProgressBar x:Name="LocateMeterBar" Height="22" Margin="0,4,0,0"
-                     Minimum="0" Maximum="1"
-                     Value="{Binding LocateMeterFraction, Mode=OneWay}"
-                     AutomationProperties.Name="Signal strength meter bar"
-                     AutomationProperties.HelpText="Live strength from the noise floor to the top of the meter range." />
-        <Border x:Name="LocateGraphHost" Height="90" Margin="0,8,0,0"
+        <!-- M5 locate overlay: covers the waterfall while locate owns the radio, so the
+             operator sees the strength view, not stale sweep rows. -->
+        <Border x:Name="LocatePanel"
+                Background="{DynamicResource {x:Static SystemColors.WindowBrushKey}}"
                 BorderBrush="{DynamicResource {x:Static SystemColors.ActiveBorderBrushKey}}"
-                BorderThickness="1"
-                AutomationProperties.Name="Signal strength graph, last 60 seconds"
-                AutomationProperties.HelpText="Rolling 60 second graph of signal strength in dBFS.">
-          <Canvas x:Name="LocateGraphCanvas" ClipToBounds="True" />
+                BorderThickness="1" Visibility="Collapsed"
+                AutomationProperties.Name="Locate view"
+                AutomationProperties.HelpText="Live signal strength of the located peak: meter, 60 second graph, peak hold and tone.">
+          <StackPanel Margin="8">
+            <TextBlock Text="Locate" FontSize="16" AutomationProperties.HeadingLevel="Level2" />
+            <TextBlock x:Name="LocateFreqText" Text="{Binding SelectedPeakText}" TextWrapping="Wrap"
+                       Margin="0,4,0,0" AutomationProperties.Name="Located frequency" />
+            <TextBlock Text="{Binding LocateCurrentText}" FontSize="30" Margin="0,8,0,0"
+                       AutomationProperties.Name="Live signal strength meter"
+                       AutomationProperties.LiveSetting="Polite" />
+            <ProgressBar x:Name="LocateMeterBar" Height="22" Margin="0,4,0,0"
+                         Minimum="0" Maximum="1"
+                         Value="{Binding LocateMeterFraction, Mode=OneWay}"
+                         AutomationProperties.Name="Signal strength meter bar"
+                         AutomationProperties.HelpText="Live strength from the noise floor to the top of the meter range." />
+            <Border x:Name="LocateGraphHost" Height="90" Margin="0,8,0,0"
+                    BorderBrush="{DynamicResource {x:Static SystemColors.ActiveBorderBrushKey}}"
+                    BorderThickness="1"
+                    AutomationProperties.Name="Signal strength graph, last 60 seconds"
+                    AutomationProperties.HelpText="Rolling 60 second graph of signal strength in dBFS.">
+              <Canvas x:Name="LocateGraphCanvas" ClipToBounds="True" />
+            </Border>
+            <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+              <TextBlock Text="Peak hold:" VerticalAlignment="Center" />
+              <TextBlock Text="{Binding LocatePeakText}" Margin="6,0,0,0" FontWeight="Bold"
+                         AutomationProperties.Name="Peak hold value" />
+              <Button Content="Reset" Command="{Binding ResetLocatePeakCommand}" Margin="8,0,0,0"
+                      AutomationProperties.Name="Reset locate peak hold" />
+            </StackPanel>
+            <CheckBox Content="Audio tone (pitch follows strength)" IsChecked="{Binding LocateToneEnabled, Mode=TwoWay}"
+                      Margin="0,8,0,0" AutomationProperties.Name="Locate audio tone"
+                      AutomationProperties.HelpText="A tone whose pitch rises with signal strength. Off by default." />
+            <TextBlock Text="{x:Static vm:MainViewModel.LocateCaveatText}" TextWrapping="Wrap" FontSize="11" Margin="0,8,0,0"
+                       AutomationProperties.Name="Locate limitations note" />
+            <Button Content="Exit locate" Command="{Binding ExitLocateCommand}" Margin="0,8,0,0"
+                    AutomationProperties.Name="Exit locate and resume sweeping" />
+          </StackPanel>
         </Border>
-        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
-          <TextBlock Text="Peak hold:" VerticalAlignment="Center" />
-          <TextBlock Text="{Binding LocatePeakText}" Margin="6,0,0,0" FontWeight="Bold"
-                     AutomationProperties.Name="Peak hold value" />
-          <Button Content="Reset" Command="{Binding ResetLocatePeakCommand}" Margin="8,0,0,0"
-                  AutomationProperties.Name="Reset locate peak hold" />
-        </StackPanel>
-        <CheckBox Content="Audio tone (pitch follows strength)" IsChecked="{Binding LocateToneEnabled, Mode=TwoWay}"
-                  Margin="0,8,0,0" AutomationProperties.Name="Locate audio tone"
-                  AutomationProperties.HelpText="A tone whose pitch rises with signal strength. Off by default." />
-        <TextBlock Text="{x:Static vm:MainViewModel.LocateCaveatText}" TextWrapping="Wrap" FontSize="11" Margin="0,8,0,0"
-                   AutomationProperties.Name="Locate limitations note" />
-        <Button Content="Exit locate" Command="{Binding ExitLocateCommand}" Margin="0,8,0,0"
-                AutomationProperties.Name="Exit locate and resume sweeping" />
-      </StackPanel>
-    </Border>
+      </Grid>
+    </Grid>
 
     <!-- M6 status bar: device serial and firmware, sample rate, sweeps/s, dropped blocks,
          process CPU, and the CSV/JSON export buttons. -->
-    <Grid Grid.Row="3" Grid.ColumnSpan="2" Margin="0,12,0,0">
+    <Grid Grid.Row="3" Margin="0,8,0,0">
       <Grid.ColumnDefinitions>
         <ColumnDefinition Width="*" />
         <ColumnDefinition Width="Auto" />
@@ -182,8 +288,3 @@
     </Grid>
   </Grid>
 </Window>
-
-
-
-
-

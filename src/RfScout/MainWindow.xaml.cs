@@ -27,10 +27,43 @@ public partial class MainWindow : Window
     private bool _waterfallPainted;
     private int _markerCount;
     private DispatcherTimer? _settingsTimer;
+    private SpectrumFrame? _plotFrame;
+    private SpectrumFrame? _plotHold;
+    private IReadOnlyList<double> _plotFloor = [];
 
     public MainWindow()
     {
         InitializeComponent();
+
+        SourceBox.ItemsSource = Enum.GetValues<ViewModels.SweepSourceKind>();
+        if (DataContext is ViewModels.MainViewModel plotModel)
+        {
+            // The real radio: without a factory the view model only ever had the synthetic source.
+            plotModel.RadioFactory = kind => kind == ViewModels.SweepSourceKind.HackRf ? OpenHackRf(plotModel) : null;
+
+            // Pointer input on the spectrum becomes view-model requests; any change to the view
+            // (zoom, pan, range, peak hold) repaints the plot even when no new frame arrives.
+            Spectrum.ZoomRequested += plotModel.Zoom;
+            Spectrum.PanRequested += plotModel.Pan;
+            Spectrum.FocusRequested += plotModel.FocusAt;
+            Spectrum.HoverRequested += plotModel.ReportSpectrumHover;
+            plotModel.NeedsRedraw += (_, _) => Dispatcher.BeginInvoke(new Action(RepaintPlot));
+
+            // Start/Stop, Analyze and Locate enable themselves from view-model state that can
+            // change off the UI thread, so ask WPF to re-check the commands when it does.
+            plotModel.PropertyChanged += (_, e) =>
+            {
+                if (e.PropertyName is nameof(ViewModels.MainViewModel.IsSweeping) or nameof(ViewModels.MainViewModel.IsLocating)
+                    or nameof(ViewModels.MainViewModel.IsAnalyzing) or nameof(ViewModels.MainViewModel.SelectedPeak))
+                {
+                    Dispatcher.BeginInvoke(new Action(System.Windows.Input.CommandManager.InvalidateRequerySuggested));
+                }
+            };
+
+            // RF amp and antenna power must be confirmed by the operator (hard rule 2).
+            plotModel.NeedsConfirmation += message => MessageBox.Show(
+                this, message, "RfScout", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) == MessageBoxResult.Yes;
+        }
 
         // The view model is created in XAML; the render loop is owned here because only the view
         // knows about the dispatcher.
@@ -104,6 +137,14 @@ public partial class MainWindow : Window
                 model.MovePeakSelection(+1);
                 e.Handled = true;
                 break;
+            case System.Windows.Input.Key.Enter:
+                if (model.AnalyzePeakCommand.CanExecute(null))
+                {
+                    model.AnalyzePeakCommand.Execute(null);
+                }
+
+                e.Handled = true;
+                break;
             case System.Windows.Input.Key.L:
                 if (!model.IsLocating)
                 {
@@ -150,13 +191,27 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>Escape leaves locate from anywhere in the window.</summary>
+    /// <summary>Escape leaves locate from anywhere in the window; Space starts or stops the sweep
+    /// unless the keyboard is in a text box, button or list that uses Space itself.</summary>
     protected override void OnKeyDown(System.Windows.Input.KeyEventArgs e)
     {
+        ArgumentNullException.ThrowIfNull(e);
         base.OnKeyDown(e);
-        if (e.Key == System.Windows.Input.Key.Escape && DataContext is ViewModels.MainViewModel model && model.IsLocating)
+        if (DataContext is not ViewModels.MainViewModel model)
+        {
+            return;
+        }
+
+        if (e.Key == System.Windows.Input.Key.Escape && model.IsLocating)
         {
             model.ExitLocate();
+            e.Handled = true;
+        }
+        else if (e.Key == System.Windows.Input.Key.Space && !e.Handled
+            && System.Windows.Input.Keyboard.FocusedElement is not (System.Windows.Controls.Primitives.TextBoxBase
+                or System.Windows.Controls.Primitives.ButtonBase or System.Windows.Controls.ComboBox))
+        {
+            model.ToggleSweep();
             e.Handled = true;
         }
     }
@@ -246,12 +301,16 @@ public partial class MainWindow : Window
 
         long before = Stopwatch.GetTimestamp();
 
-        if (!model.TryRefreshDisplay(_lastSequence, out _, out _, out _))
+        if (!model.TryRefreshDisplay(_lastSequence, out SpectrumFrame? latest, out SpectrumFrame? hold, out IReadOnlyList<double> floor))
         {
             return;
         }
 
         _lastSequence = model.Frames.Sequence;
+        _plotFrame = latest;
+        _plotHold = hold;
+        _plotFloor = floor;
+        RepaintPlot();
 
         SpectrumViewport view = model.View;
         DbRange range = model.ColourRange;
@@ -285,6 +344,32 @@ public partial class MainWindow : Window
         model.RecordUiPaint(ElapsedMs(before));
     }
 
+    /// <summary>Open the first HackRF on the USB bus, or record why it failed and return null.</summary>
+    private static IRadioSource? OpenHackRf(ViewModels.MainViewModel model)
+    {
+        try
+        {
+            var device = new Services.HackRf.HackRfDevice();
+            model.LastOpenError = null;
+            return device;
+        }
+        catch (Exception ex) when (ex is Services.HackRf.HackRfException or DllNotFoundException
+            or BadImageFormatException or InvalidOperationException or EntryPointNotFoundException)
+        {
+            model.LastOpenError = ex.Message;
+            return null;
+        }
+    }
+
+    /// <summary>Rebuild the spectrum plot from the last frame and the current view and range.</summary>
+    private void RepaintPlot()
+    {
+        if (DataContext is ViewModels.MainViewModel model)
+        {
+            Spectrum.SetModel(SpectrumPlotModel.Build(_plotFrame, _plotHold, _plotFloor, model.View, model.ColourRange));
+        }
+    }
+
     /// <summary>Size the shared bitmap for the current grid (recreated when the span changes).</summary>
     private void EnsureBitmap(int columns, int rows)
     {
@@ -294,27 +379,42 @@ public partial class MainWindow : Window
         }
 
         _bitmap = new WriteableBitmap(columns, rows, 96, 96, PixelFormats.Bgra32, null);
-        _rowScratch = new byte[columns * 4];
+        _rowScratch = new byte[columns * 4 * rows];
     }
 
-    /// <summary>Blit the newest row into the bitmap and return it for the control, or null on failure.</summary>
+    /// <summary>
+    /// Repaint the whole strip into the bitmap, newest sweep at the top and older ones below, so
+    /// the waterfall scrolls down. Returns the bitmap for the control, or null on failure.
+    /// </summary>
     private WriteableBitmap? CopyNewestRow(WaterfallModel strip)
     {
         WriteableBitmap? bitmap = _bitmap;
-        if (bitmap is null || _rowScratch.Length < bitmap.PixelWidth * 4)
+        if (bitmap is null)
         {
             return null;
         }
 
-        if (!strip.TryCopyRow(strip.NewestRow, _rowScratch))
+        int rows = bitmap.PixelHeight;
+        int stride = bitmap.PixelWidth * 4;
+        if (_rowScratch.Length < stride * rows || strip.Rows != rows)
         {
             return null;
+        }
+
+        int newest = strip.NewestRow;
+        for (int r = 0; r < rows; r++)
+        {
+            int source = (newest - r + rows) % rows;
+            if (!strip.TryCopyRow(source, _rowScratch.AsSpan(r * stride, stride)))
+            {
+                return null;
+            }
         }
 
         bitmap.Lock();
         try
         {
-            bitmap.WritePixels(new Int32Rect(0, 0, bitmap.PixelWidth, 1), _rowScratch, bitmap.PixelWidth * 4, 0);
+            bitmap.WritePixels(new Int32Rect(0, 0, bitmap.PixelWidth, rows), _rowScratch, stride, 0);
         }
         finally
         {

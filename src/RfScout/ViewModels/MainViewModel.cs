@@ -236,6 +236,10 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     /// </summary>
     public Func<SweepSourceKind, IRadioSource?>? RadioFactory { get; set; }
 
+    /// <summary>Why the last attempt to open the radio failed, shown in the status line; set by
+    /// the <see cref="RadioFactory"/>.</summary>
+    public string? LastOpenError { get; set; }
+
     public string Title { get; } =
         $"RfScout {Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion.Split('+')[0]}";
 
@@ -1152,7 +1156,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         if (source is null)
         {
             StatusText = SourceKind == SweepSourceKind.HackRf
-                ? "No HackRF found. Plug it in, or switch the source to Synthetic."
+                ? $"Could not open the HackRF{(string.IsNullOrEmpty(LastOpenError) ? string.Empty : $" ({LastOpenError})")}. Check it is plugged in and not in use, or switch the source to Synthetic."
                 : "No source available.";
             return;
         }
@@ -1193,6 +1197,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             OnPropertyChanged(nameof(View));
         }
 
+        OnPropertyChanged(nameof(StatusText));
+
         RadioDeviceInfo? info = source.DeviceInfo;
         DeviceText = info is null ? "Radio open" : $"{info.BoardName} {info.ShortSerial} | fw {info.FirmwareVersion} | api {info.UsbApiVersionText}";
         DeviceLostBanner = false;
@@ -1212,6 +1218,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             OnPropertyChanged(nameof(IsSweeping));
             _statusText = "Stopped.";
         }
+
+        OnPropertyChanged(nameof(StatusText));
 
         if (source is null)
         {
@@ -1487,14 +1495,20 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 
     private IRadioSource? OpenSource()
     {
-        IRadioSource? created = RadioFactory?.Invoke(SourceKind);
-        if (created is not null)
+        if (RadioFactory is { } factory)
         {
-            return created;
+            IRadioSource? created = factory(SourceKind);
+
+            // The operator picked the HackRF: if it cannot be opened, say so rather than quietly
+            // showing synthetic data that looks like a working radio.
+            if (created is not null || SourceKind == SweepSourceKind.HackRf)
+            {
+                return created;
+            }
         }
 
-        // No factory wired (a test, or the app starting before the device layer is ready): fall
-        // back to the synthetic source so the UI still has something to show.
+        // Synthetic chosen, or no factory wired (a test): use the synthetic source so the UI
+        // still has something to show.
         SweepPlan? plan = CurrentPlan;
         if (plan is null)
         {
@@ -2638,7 +2652,9 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         }
     }
 
-    private bool Confirm(string message) => NeedsConfirmation?.Invoke(message) ?? true;
+    /// <summary>Ask the operator. With nobody listening the answer is no: an RF switch must never
+    /// turn on unconfirmed (hard rule 2).</summary>
+    private bool Confirm(string message) => NeedsConfirmation?.Invoke(message) ?? false;
 
 
     // ---------------------------------------------------------------------------

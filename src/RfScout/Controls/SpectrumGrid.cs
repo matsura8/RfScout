@@ -32,6 +32,10 @@ public class SpectrumGrid : FrameworkElement
     {
         _host = new SkiaHost(this);
         _host.MouseLeftButtonDown += (_, _) => RaiseProbe(_host.LastPoint);
+
+        // The host is this element's only visual child; without AddVisualChild and an arrange
+        // pass it stays 0 x 0 and the waterfall never appears.
+        AddVisualChild(_host);
     }
 
     /// <summary>Replaces the waterfall bitmap (owner transfers the instance to the control).</summary>
@@ -107,9 +111,21 @@ public class SpectrumGrid : FrameworkElement
     /// or a ScrollViewer that space is unbounded, and WPF rejects an infinite DesiredSize
     /// (InvalidOperationException at startup), so an unbounded side falls back to a default.
     /// </remarks>
-    protected override Size MeasureOverride(Size availableSize) => new(
-        double.IsInfinity(availableSize.Width) ? DefaultWidth : availableSize.Width,
-        double.IsInfinity(availableSize.Height) ? DefaultHeight : availableSize.Height);
+    protected override Size MeasureOverride(Size availableSize)
+    {
+        var size = new Size(
+            double.IsInfinity(availableSize.Width) ? DefaultWidth : availableSize.Width,
+            double.IsInfinity(availableSize.Height) ? DefaultHeight : availableSize.Height);
+        _host.Measure(size);
+        return size;
+    }
+
+    /// <inheritdoc />
+    protected override Size ArrangeOverride(Size finalSize)
+    {
+        _host.Arrange(new Rect(finalSize));
+        return finalSize;
+    }
 
     /// <summary>Width reported when the layout offers unbounded width.</summary>
     internal const double DefaultWidth = 480d;
