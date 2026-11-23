@@ -76,8 +76,8 @@
       }
     ]
   },
-  "ageRatingConfirmedBy": "",
-  "autoSubmit": false,
+  "ageRatingConfirmedBy": "Owner (Max Power IT LLC), confirmed in chat on 2026-11-23",
+  "autoSubmit": true,
   "notesForCertification": "RfScout is receive-only software for the HackRF One USB radio. Without a HackRF connected it starts and shows 'no radio'; all functions need the device. It needs the WinUSB driver (Zadig), which the listing explains. The app makes no network connections.",
   "publish": "asap"
 }
