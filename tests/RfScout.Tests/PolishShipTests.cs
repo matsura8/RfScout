@@ -232,7 +232,7 @@ public sealed class PolishShipTests : IDisposable
         IReadOnlyList<PeakExportRow> peaks = [Row(7, "AC123456"), Row(8, "AC789ABC")];
 
         string csv = PeakExport.PeaksToCsv(peaks);
-        Assert.StartsWith("id,frequency_hz,power_dbfs,snr_db,bandwidth_hz,duty,activity,band,best_guess,confidence,last_seen_utc"+(char)13+(char)10, csv);
+        Assert.StartsWith("id,frequency_hz,power_dbfs,snr_db,bandwidth_hz,duty,activity,band,best_guess,confidence,last_seen_utc" + (char)13 + (char)10, csv);
         Assert.Contains("7,109000007", csv);
 
         string idCsv = PeakExport.IdentificationsToCsv(peaks);

@@ -1,4 +1,4 @@
-﻿using RfScout.Core.Display;
+using RfScout.Core.Display;
 
 namespace RfScout.Core.Settings;
 

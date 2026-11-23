@@ -44,7 +44,7 @@ public static class PerformanceTests
             var span = iq.AsSpan(z, Math.Min(4096, iq.Length - z));
             for (int s = 0; s < span.Length; s++) span[s] = (byte)rng.Next(-128, 129);
         }
-        
+
         var header = new byte[10];
         header[0] = 0x7F;
         header[1] = 0x7F;
@@ -106,7 +106,7 @@ public static class PerformanceTests
             IReadOnlyList<TrackedPeak> tracks = tracker.Update(peaks, complete.BinWidthHz, DateTimeOffset.UtcNow);
             _ = SpectrumPlotModel.Build(complete, complete, floorDb, viewport, range);
         }
-for (int i = 0; i < WarmupSweeps; i++)
+        for (int i = 0; i < WarmupSweeps; i++)
         {
             Sweep(assembler, floor, detector, tracker, viewport, range, iq, blockBytes, Block);
         }

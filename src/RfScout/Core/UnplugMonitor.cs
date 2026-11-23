@@ -1,4 +1,4 @@
-﻿namespace RfScout.Core;
+namespace RfScout.Core;
 
 /// <summary>A snapshot of the USB bus: which declared device ids are present right now.</summary>
 public delegate bool UsbPresent(ushort vid, ushort pid);

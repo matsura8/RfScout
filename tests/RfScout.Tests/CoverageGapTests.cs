@@ -55,7 +55,7 @@ public class CoverageGapTests
         Assert.True(ring.Write([1, 2, 3]));
         Assert.True(ring.Write([1, 2, 3, 4, 5])); // 5 free, 5 needed -> fits exactly
         Assert.False(ring.Write([7, 7, 7]));      // 3 needed, 3 free, but only 3-3=0 contiguous at the
-                                                 // tail: the wrap gap makes it not fit, so it is dropped whole
+                                                  // tail: the wrap gap makes it not fit, so it is dropped whole
         Assert.False(ring.Write([9, 9, 9, 9, 9, 9])); // 6 needed, 3 free -> dropped whole
         Assert.Equal(8, ring.BytesAvailable);     // queued data survives the rejected write untouched
 
