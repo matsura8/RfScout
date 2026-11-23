@@ -102,7 +102,20 @@ public class SpectrumGrid : FrameworkElement
     }
 
     /// <inheritdoc />
-    protected override Size MeasureOverride(Size availableSize) => availableSize;
+    /// <remarks>
+    /// The control fills whatever space the layout offers. Inside an auto-sized row, a StackPanel
+    /// or a ScrollViewer that space is unbounded, and WPF rejects an infinite DesiredSize
+    /// (InvalidOperationException at startup), so an unbounded side falls back to a default.
+    /// </remarks>
+    protected override Size MeasureOverride(Size availableSize) => new(
+        double.IsInfinity(availableSize.Width) ? DefaultWidth : availableSize.Width,
+        double.IsInfinity(availableSize.Height) ? DefaultHeight : availableSize.Height);
+
+    /// <summary>Width reported when the layout offers unbounded width.</summary>
+    internal const double DefaultWidth = 480d;
+
+    /// <summary>Height reported when the layout offers unbounded height.</summary>
+    internal const double DefaultHeight = 160d;
 
     private void RaiseProbe(Point point)
     {
