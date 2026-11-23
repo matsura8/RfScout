@@ -81,6 +81,9 @@
       </StackPanel>
       <StackPanel Style="{StaticResource Group}">
         <CheckBox Content="Auto range" IsChecked="{Binding AutoScale}" VerticalAlignment="Center" Margin="0,0,6,0" />
+        <Button x:Name="AutoScaleButton" Content="Auto now" Command="{Binding AutoScaleCommand}" Margin="0,0,6,0"
+                AutomationProperties.Name="Auto range now"
+                AutomationProperties.HelpText="Apply an automatic display range to the latest sweep once." />
         <Label Content="dB" />
         <TextBox Width="42" VerticalContentAlignment="Center" Text="{Binding DbMinText}" AutomationProperties.Name="Display minimum dB" />
         <TextBlock Text=" to " VerticalAlignment="Center" />
