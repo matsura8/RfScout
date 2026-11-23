@@ -15,12 +15,22 @@
           "Locate mode: large signal-strength meter for hunting a transmitter",
           "Receive only: never transmits"
         ],
-        "keywords": ["HackRF", "SDR", "spectrum analyzer", "waterfall", "radio scanner", "RF", "ADS-B"],
+        "keywords": [
+          "HackRF",
+          "SDR",
+          "spectrum analyzer",
+          "waterfall",
+          "radio scanner",
+          "RF",
+          "ADS-B"
+        ],
         "privacyPolicy": "https://github.com/matsura8/RfScout/blob/main/PRIVACY.md",
         "supportContact": "https://github.com/matsura8/RfScout/issues",
         "website": "https://github.com/matsura8/RfScout",
-        "copyrightAndTrademarkInfo": "Copyright 2026 RfScout contributors. Licensed under GPL-3.0-or-later.",
-        "releaseNotes": ""
+        "copyrightAndTrademarkInfo": "Copyright 2026 Max Power IT LLC. Licensed under GPL-3.0-or-later.",
+        "releaseNotes": "",
+        "developedBy": "Max Power IT LLC",
+        "additionalLicenseTerms": "RfScout is free software licensed under the GNU General Public License, version 3 or (at your option) any later version. You may copy, modify and redistribute it under those terms. Complete source code: https://github.com/matsura8/RfScout"
       }
     }
   }
