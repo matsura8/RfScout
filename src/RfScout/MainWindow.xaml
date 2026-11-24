@@ -208,6 +208,15 @@
                        AutomationProperties.Name="Classification" />
             <TextBlock Text="{Binding ReasonsText}" FontSize="12" TextWrapping="Wrap" Margin="0,4,0,0" AutomationProperties.Name="Classification reasons" />
             <TextBlock Text="{Binding FeaturesText}" FontSize="12" TextWrapping="Wrap" Margin="0,4,0,0" AutomationProperties.Name="Measured features" />
+            <TextBlock Text="Zoomed spectrum" FontSize="12" Margin="0,10,0,2" />
+            <ctl:TracePlot Points="{Binding ZoomedSpectrumPoints}" Height="60" ToolTip="{Binding ZoomedSpectrumText}"
+                           AutomationProperties.Name="Zoomed spectrum of the analyzed capture" AutomationProperties.HelpText="{Binding ZoomedSpectrumText}" />
+            <TextBlock Text="Envelope" FontSize="12" Margin="0,6,0,2" />
+            <ctl:TracePlot Points="{Binding EnvelopePoints}" Height="60" ToolTip="{Binding EnvelopeText}"
+                           AutomationProperties.Name="Envelope of the analyzed capture" AutomationProperties.HelpText="{Binding EnvelopeText}" />
+            <TextBlock Text="Instantaneous frequency" FontSize="12" Margin="0,6,0,2" />
+            <ctl:TracePlot Points="{Binding InstFreqPoints}" Height="60" ToolTip="{Binding InstFreqText}"
+                           AutomationProperties.Name="Instantaneous frequency of the analyzed capture" AutomationProperties.HelpText="{Binding InstFreqText}" />
             <TextBlock Text="Decode log" FontSize="13" Margin="0,10,0,2" />
             <TextBox Text="{Binding DecodeLogText, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap" MinHeight="60" MaxHeight="160"
                      VerticalScrollBarVisibility="Auto" FontSize="11" AutomationProperties.Name="Decode log" />

@@ -156,6 +156,9 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     private string _zoomedSpectrumText = string.Empty;
     private string _envelopeText = string.Empty;
     private string _instFreqText = string.Empty;
+    private IReadOnlyList<double> _zoomedSpectrumPoints = [];
+    private IReadOnlyList<double> _envelopePoints = [];
+    private IReadOnlyList<double> _instFreqPoints = [];
     private SignalFeatures? _lastFeatures;
     private ClassificationResult? _lastClassification;
     private int _lastAnalyzedPeakId = -1;
@@ -909,6 +912,30 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         private set => SetField(ref _instFreqText, value);
     }
 
+    /// <summary>Most points a detail-pane trace plot is handed (the capture is decimated to this).</summary>
+    public const int TracePlotPoints = 400;
+
+    /// <summary>Zoomed-spectrum trace of the last analyze, decimated for the detail-pane plot.</summary>
+    public IReadOnlyList<double> ZoomedSpectrumPoints
+    {
+        get => _zoomedSpectrumPoints;
+        private set => SetField(ref _zoomedSpectrumPoints, value);
+    }
+
+    /// <summary>Envelope trace of the last analyze, decimated for the detail-pane plot.</summary>
+    public IReadOnlyList<double> EnvelopePoints
+    {
+        get => _envelopePoints;
+        private set => SetField(ref _envelopePoints, value);
+    }
+
+    /// <summary>Instantaneous-frequency trace of the last analyze, decimated for the detail-pane plot.</summary>
+    public IReadOnlyList<double> InstFreqPoints
+    {
+        get => _instFreqPoints;
+        private set => SetField(ref _instFreqPoints, value);
+    }
+
     /// <summary>The features of the last analyze, or null before one ran. Public for tests and the detail pane.</summary>
     public SignalFeatures? LastFeatures => _lastFeatures;
 
@@ -1346,6 +1373,14 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         }
 
         UpdatePeakPipeline(latest);
+
+        // Auto-analyze runs after each completed sweep, once the peak table holds that sweep's peaks.
+        // This is the UI thread, outside the radio's callbacks, so the analyze stops the sweep and
+        // opens the radio itself (the manual Analyze path) and restarts the sweep when it is done.
+        if (latest.SweepCompleted && _autoAnalyze && IsSweeping)
+        {
+            _ = TickAutoAnalyze(borrowRunningSweep: false);
+        }
 
         lock (_gate)
         {
@@ -2174,6 +2209,9 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             ZoomedSpectrumText = zoom.Describe();
             EnvelopeText = envelope.Describe();
             InstFreqText = instFreq.Describe();
+            ZoomedSpectrumPoints = zoom.Decimate(TracePlotPoints).Points;
+            EnvelopePoints = envelope.Decimate(TracePlotPoints).Points;
+            InstFreqPoints = instFreq.Decimate(TracePlotPoints).Points;
             AnalyzeStatus = $"Peak {peak.Id}: {result.ClassText} {result.Confidence:P0}.";
         }
         finally
@@ -2199,8 +2237,11 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     /// Round-robin auto-analyze: called after each completed sweep while <see cref="AutoAnalyze"/>
     /// is on; analyzes the next visible peak in turn. Returns the running task, or null when there
     /// is nothing to do. Re-entrancy is guarded so a slow analyze never stacks.
+    /// <paramref name="borrowRunningSweep"/> is true when called from the radio's own sweep callback
+    /// (the analyze then captures on the running source); <see cref="TryRefreshDisplay"/> calls it
+    /// from the UI thread with false, so the analyze stops the sweep and opens the radio itself.
     /// </summary>
-    public Task? TickAutoAnalyze()
+    public Task? TickAutoAnalyze(bool borrowRunningSweep = true)
     {
         if (!AutoAnalyze || IsAnalyzing || _autoAnalyzeTickActive)
         {
@@ -2217,7 +2258,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         SelectedPeak = target;
         // The tick runs from the sweep's completion callback: mark the target so the analyze
         // borrows the running sweep's radio instead of trying to stop and re-open it.
-        _analyzeSourceMarker = target;
+        _analyzeSourceMarker = borrowRunningSweep ? target : null;
         _autoAnalyzeTickActive = true;
         return RunAutoAnalyzeAsync(target);
     }
@@ -2231,6 +2272,11 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             // together here, and a later tick must never have its target overwritten by an
             // earlier analyze still unwinding.
             await AnalyzePeakAsync(target).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or IOException or TimeoutException or OperationCanceledException)
+        {
+            // Nothing awaits an auto-analyze tick: report the failure instead of losing it.
+            AnalyzeStatus = $"Auto-analyze failed: {ex.Message}";
         }
         finally
         {

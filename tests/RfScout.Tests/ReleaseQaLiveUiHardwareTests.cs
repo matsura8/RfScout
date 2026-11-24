@@ -223,15 +223,13 @@ public sealed class ReleaseQaLiveUiHardwareTests
             PumpDispatcher(100);
             if (condition(model))
             {
-                result = WaitForFrameResult;
+                _ = model.Frames.TryGetSnapshot(out result, out _);
                 break;
             }
         }
 
         return result;
     }
-
-    [ThreadStatic] private static SpectrumFrame? WaitForFrameResult;
 
     private static void PumpDispatcher(int milliseconds)
     {
