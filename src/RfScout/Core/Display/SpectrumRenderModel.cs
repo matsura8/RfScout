@@ -37,7 +37,12 @@ public sealed class SpectrumPlotModel
     /// <summary>dBFS at the top of the plot.</summary>
     public double TopDb { get; private init; }
 
-    /// <summary>dBFS at the bottom of the plot, always <see cref="BottomDb"/>.</summary>
+    /// <summary>dBFS at the bottom of the plot. Fixed at <see cref="BottomDb"/> for an explicit
+    /// toolbar range; follows <see cref="DbRange.MinDb"/> while auto-ranging, so the axis labels
+    /// match the display range instead of showing -160 to -40 while Auto range reads -59 to -38.</summary>
+    public double BottomDbValue { get; private init; } = BottomDb;
+
+    /// <summary>dBFS at the bottom of the plot for a fixed-scale model (an explicit toolbar range).</summary>
     public static double FixedBottomDb => BottomDb;
 
     /// <summary>Frequency at the left edge of the visible slice.</summary>
@@ -72,11 +77,13 @@ public sealed class SpectrumPlotModel
         ArgumentNullException.ThrowIfNull(range);
 
         double top = range.MaxDb;
+        double bottom = range.AutoScaled ? range.MinDb : BottomDb;
         if (frame is null || frame.BinCount == 0)
         {
             return new SpectrumPlotModel
             {
                 TopDb = top,
+                BottomDbValue = bottom,
                 ViewStartHz = view.ViewStartHz,
                 ViewStopHz = view.ViewStopHz,
             };
@@ -89,6 +96,7 @@ public sealed class SpectrumPlotModel
             return new SpectrumPlotModel
             {
                 TopDb = top,
+                BottomDbValue = bottom,
                 ViewStartHz = view.ViewStartHz,
                 ViewStopHz = view.ViewStopHz,
             };
@@ -106,7 +114,7 @@ public sealed class SpectrumPlotModel
             float value = frame.PowerDb[i];
             if (value != SpectrumFrame.EmptyBin)
             {
-                live.Add(new PlotPoint(x, Height(value, top)));
+                live.Add(new PlotPoint(x, Height(value, top, bottom)));
             }
 
             float held = peakHold is not null && peakHold.BinCount == frame.BinCount
@@ -114,18 +122,19 @@ public sealed class SpectrumPlotModel
                 : SpectrumFrame.EmptyBin;
             if (held != SpectrumFrame.EmptyBin)
             {
-                hold.Add(new PlotPoint(x, Height(held, top)));
+                hold.Add(new PlotPoint(x, Height(held, top, bottom)));
             }
 
             if (i < floors.Count && !double.IsNaN(floors[i]))
             {
-                floor.Add(new PlotPoint(x, Height(floors[i], top)));
+                floor.Add(new PlotPoint(x, Height(floors[i], top, bottom)));
             }
         }
 
         return new SpectrumPlotModel
         {
             TopDb = top,
+            BottomDbValue = bottom,
             Live = live,
             PeakHold = hold,
             Floor = floor,
@@ -135,16 +144,17 @@ public sealed class SpectrumPlotModel
         };
     }
 
-    /// <summary>Height of a dB value on the fixed vertical scale, clamped into 0..1.</summary>
-    private static double Height(double db, double topDb)
+    /// <summary>Height of a dB value on the vertical scale (top and bottom of the current axis),
+    /// clamped into 0..1.</summary>
+    private static double Height(double db, double topDb, double bottomDb)
     {
-        double span = topDb - BottomDb;
+        double span = topDb - bottomDb;
         if (span <= 0 || double.IsNaN(db))
         {
             return 0;
         }
 
-        return Math.Clamp((db - BottomDb) / span, 0, 1);
+        return Math.Clamp((db - bottomDb) / span, 0, 1);
     }
 
     /// <summary>
@@ -152,7 +162,7 @@ public sealed class SpectrumPlotModel
     /// the hover readout shows an axis value rather than a pixel.
     /// </summary>
     public double DbAtHeight(double yFraction) =>
-        BottomDb + (Math.Clamp(yFraction, 0, 1) * (TopDb - BottomDb));
+        BottomDbValue + (Math.Clamp(yFraction, 0, 1) * (TopDb - BottomDbValue));
 }
 
 /// <summary>
@@ -175,6 +185,17 @@ public static class PlotReadout
         if (frame is null || frame.FilledBins == 0)
         {
             return "No sweep yet";
+        }
+
+        // QA defect 1: while a sweep is running the label above the plot must say so, not
+        // "No sweep yet". The hover text is the label, so state the sweep state here.
+        if (!frame.SweepCompleted)
+        {
+            return string.Format(
+                CultureInfo.InvariantCulture,
+                "Sweeping {0} to {1}",
+                FrequencyFormat.MHz(frame.StartHz),
+                FrequencyFormat.MHz(frame.StopHz));
         }
 
         double hz = view.HzAt(xFraction);

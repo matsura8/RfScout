@@ -30,6 +30,17 @@ public sealed class AnalyzeController
     /// <summary>Guard band: the signal must fit inside this fraction of the sample rate.</summary>
     public const double OccupancyFraction = 0.5;
 
+    /// <summary>
+    /// A signal at least this wide is broadcast-band FM sized (~200 kHz channel): it needs a
+    /// capture rate high enough that the HackRF baseband filter and the s8 quantiser do not
+    /// distort its ±75 kHz deviation. 10 Msps puts the filter at 7.5 MHz and gives the FM tone
+    /// ~133 quantiser steps; 2 Msps clips the swing and its coarse steps fake extra deviation.
+    /// </summary>
+    public const double WfmSignalBandwidthHz = 100_000;
+
+    /// <summary>The capture rate raised up to for a WFM-sized signal (see <see cref="WfmSignalBandwidthHz"/>).</summary>
+    public const int WfmSampleRateHz = 10_000_000;
+
     private readonly Lock _gate = new();
     private bool _busy;
 
@@ -71,6 +82,19 @@ public sealed class AnalyzeController
         }
 
         rate = Math.Min(rate, MaxSampleRateHz);
+
+        // QA defect 4: a strong FM station measured 228 kHz deviation and 956 kHz occupied
+        // bandwidth, about three times its true ~75 kHz / ~200 kHz, so no WFM rule fired. The
+        // -3 dB peak bandwidth of a wide signal is roughly its modulation audio (about 15 kHz
+        // for WFM), which plans a 2 Msps capture; the baseband filter then passes only ~1.5 MHz
+        // and clips the ±75 kHz swing, and the s8 quantiser's coarse steps add phase noise on
+        // top. The measured deviation and bandwidth land about 3x high. WFM needs a 10 Msps
+        // capture (the filter and quantiser are then clean); the classifier's rate check stays
+        // as the backstop.
+        if (signalBandwidthHz >= WfmSignalBandwidthHz)
+        {
+            rate = Math.Max(rate, WfmSampleRateHz);
+        }
 
         double seconds = Math.Clamp(
             Math.Min(MaxCaptureSeconds, maxCaptureSeconds),

@@ -159,12 +159,26 @@ public class CoverageGapTests
     [Fact]
     public void PlotReadoutHoverFormatsFrequencyAndPower()
     {
-        SpectrumFrame frame = Frame([-50f, -42.5f, -30f]);
+        // completed: true so Hover reports the bin value; an incomplete sweep reads as a
+        // "Sweeping ..." status line instead (QA defect 1).
+        SpectrumFrame frame = Frame([-50f, -42.5f, -30f], completed: true);
         SpectrumViewport view = new(frame.StartHz, frame.StopHz);
         string text = PlotReadout.Hover(frame, view, 0.5, 0.5);
         Assert.Contains("144", text, StringComparison.Ordinal);
         Assert.Contains("-42", text, StringComparison.Ordinal);
         Assert.Equal("No sweep yet", PlotReadout.Hover(null, view, 0.5, 0.5));
+    }
+
+    [Fact]
+    public void PlotReadoutHoverAnnouncesAnIncompleteSweepInsteadOfNoSweepYet()
+    {
+        // QA defect 1: while a live sweep was already filling the grid, the label above the plot
+        // still read "No sweep yet". An incomplete sweep must announce itself as sweeping.
+        SpectrumFrame partial = Frame([-50f, -42.5f, -30f]);
+        SpectrumViewport view = new(partial.StartHz, partial.StopHz);
+        string text = PlotReadout.Hover(partial, view, 0.5, 0.5);
+        Assert.StartsWith("Sweeping ", text, StringComparison.Ordinal);
+        Assert.Contains("144", text, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -221,5 +235,32 @@ public class CoverageGapTests
         Assert.True(floor.All(v => v is >= -80 and <= -40));
         estimator.Reset();
         Assert.Equal(0, estimator.Sweeps);
+    }
+
+    [Fact]
+    public void WaterfallFillRowClampsOutOfRangeAndDoublesNaN()
+    {
+        byte[] row = new byte[4 * 4];
+        WaterfallModel.FillRow(
+            row,
+            new float[] { float.NaN, float.PositiveInfinity, float.NegativeInfinity, 0.75f },
+            new(-100.0, 0.0),
+            ColorMapKind.Viridis,
+            4);
+        byte[] lookup = ColorMap.Lookup(ColorMapKind.Viridis);
+        for (int column = 0; column < 3; column++)
+        {
+            Assert.Equal(lookup[0], row[(column * 4) + 2]);
+            Assert.Equal(255, row[(column * 4) + 3]);
+            Assert.Equal(lookup[2], row[column * 4]);
+        }
+
+        // NaN and both infinities count as empty bins, so columns 0..2 paint the bottom of the
+        // ramp. +0.75 dB sits above the -100..0 range and clamps to the top entry.
+        int index = ColorMap.IndexOf(1.0) * 3;
+        // Pixels are BGRA: red lands in byte 2 of the pixel, blue in byte 0.
+        Assert.Equal(lookup[index], row[14]);
+        Assert.Equal(lookup[index + 1], row[13]);
+        Assert.Equal(lookup[index + 2], row[12]);
     }
 }

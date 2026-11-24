@@ -32,6 +32,27 @@ public sealed class MainWindowSmokeTests
     });
 
     [Fact]
+    public void SweepAndAutoRangeCommandsAreWired() => Sta.Run(() =>
+    {
+        var window = new MainWindow();
+        try
+        {
+            window.Measure(new Size(1280, 820));
+            window.Arrange(new Rect(0, 0, 1280, 820));
+            window.UpdateLayout();
+
+            var model = (MainViewModel)window.DataContext;
+            var autoScaleButton = Assert.IsType<System.Windows.Controls.Button>(window.FindName("AutoScaleButton"));
+            Assert.Same(model.AutoScaleCommand, autoScaleButton.Command);
+            Assert.True(model.ToggleSweepCommand.CanExecute(null));
+        }
+        finally
+        {
+            window.Close();
+        }
+    });
+
+    [Fact]
     public void RfSwitchesStayOffWithoutConfirmation() => Sta.Run(() =>
     {
         using var model = new MainViewModel();

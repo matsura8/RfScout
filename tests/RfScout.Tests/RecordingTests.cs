@@ -74,6 +74,44 @@ public sealed class RecordingTests : IDisposable
     }
 
     [Fact]
+    public void PlanForBroadcastFmSizedPeakRaisesRateToTenMsps()
+    {
+        // QA defect 4: a strong FM station measured ~3x its true deviation and occupied
+        // bandwidth at the 2 Msps capture this planner used to pick, because the HackRF
+        // baseband filter clipped the +/-75 kHz swing and the s8 quantiser added phase noise.
+        // A ~200 kHz WFM channel must plan a 10 Msps capture.
+        AnalyzePlan wfm = AnalyzeController.PlanFor(106_500_000, 200_000, HackRfCaptureLimitBytes, 2.0);
+        Assert.Equal(AnalyzeController.WfmSampleRateHz, wfm.SampleRateHz);
+        Assert.True(wfm.IsSane);
+
+        // A narrow signal (AIS 16k) still plans the minimum rate: the raise is WFM-sized only.
+        AnalyzePlan narrow = AnalyzeController.PlanFor(162_050_000, 16_000, HackRfCaptureLimitBytes, 2.0);
+        Assert.Equal(AnalyzeController.MinSampleRateHz, narrow.SampleRateHz);
+
+        // Below the WFM-sized threshold the raise must not fire.
+        AnalyzePlan justUnder = AnalyzeController.PlanFor(100_000_000, AnalyzeController.WfmSignalBandwidthHz - 1, HackRfCaptureLimitBytes, 2.0);
+        Assert.True(justUnder.SampleRateHz < AnalyzeController.WfmSampleRateHz, "sub-WFM widths keep the plain doubling plan");
+
+        // The byte cap still wins last: a tiny cap must not plan more bytes than allowed.
+        AnalyzePlan capped = AnalyzeController.PlanFor(106_500_000, 200_000, 1L << 20, 2.0);
+        Assert.True(capped.SampleCount * 2 <= (1L << 20), "plan must respect the byte cap");
+    }
+
+    [Fact]
+    public void LiveSizedWfmIsClassifiedWfmAtThePlannedCaptureRate()
+    {
+        // The end-to-end half of QA defect 4: at the rate the planner now picks for a WFM-sized
+        // peak, a broadcast-FM-sized signal (75 kHz deviation, 15 kHz audio) must classify WFM.
+        const int Rate = AnalyzeController.WfmSampleRateHz;
+        byte[] iq = SignalGenerator.Wfm(2_000_000, Rate, toneHz: 0, devHz: 75_000, modHz: 15_000);
+        SignalFeatures features = FeatureExtractor.Extract(iq, Rate);
+        ClassificationResult result = ModulationClassifier.Classify(features);
+        Assert.Equal(ModulationClass.Wfm, result.Class);
+        Assert.True(features.FmDeviationHz is > 20_000 and < 100_000, features.Describe());
+        Assert.True(features.OccupiedBandwidthHz is > 30_000 and < 250_000, features.Describe());
+    }
+
+    [Fact]
     public void PlanHonoursTheByteCapByShrinkingTheWindowOrRate()
     {
         // 1 MiB cap at 2 Msps s8 = 262144 samples = 0.131 s: below the 0.5 s floor, so the plan

@@ -96,7 +96,7 @@ radio, and exits with 0 when they pass.
 ## Tests and checks
 
 Tests use xUnit v3 on Microsoft.Testing.Platform (see `global.json`). The DSP, peak, classifier,
-recording and display code is tested against synthetic signals, so no radio is needed. The suite currently has 302 tests (5 skipped with documented reasons).
+recording and display code is tested against synthetic signals, so no radio is needed. The suite currently has 349 tests (4 skipped with documented reasons), and 16 hardware tests run against the attached HackRF.
 
 ```powershell
 dotnet test --filter-not-trait Category=Hardware   # unit tests, no radio needed
@@ -158,11 +158,11 @@ learning, so every label comes with the features that decided it.
 
 ## Known limitations
 
-- **Live hardware checks are partly outstanding.** The sweep and peak pipeline have been run on a
-  HackRF, but the narrowband capture and live FM classification tests have not yet been re-run
-  since analysis mode was added. A long-running memory soak test has not been run either.
-- **One classifier case is skipped.** A synthetic 2-FSK signal (5 kHz deviation, 4800 baud) is
-  classified as NFM. Further tuning is planned.
+- **Live hardware checks are run, with one gap open.** The sweep, peak pipeline, narrowband
+  capture, live FM analyze/locate and the 433/1090 presets have all been run on a HackRF (the
+  live UI hardware test logs what the air produced rather than failing on a quiet band). The
+  live WFM classification of a strong FM station is still unconfirmed: the last capture ended
+  "classified unknown (0 %)". A long-running memory soak test has not been run either.
 - **Two Mode S frame tests are skipped.** At 2 Msps the test builder's half-microsecond pulses are
   a single sample and the decoder's edge timing cannot resolve them; the callsign and airborne
   position frames decode only after a proper pulse resampler, which is deferred. The CRC and ICAO

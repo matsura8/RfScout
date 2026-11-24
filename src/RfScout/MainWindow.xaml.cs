@@ -211,7 +211,10 @@ public partial class MainWindow : Window
             && System.Windows.Input.Keyboard.FocusedElement is not (System.Windows.Controls.Primitives.TextBoxBase
                 or System.Windows.Controls.Primitives.ButtonBase or System.Windows.Controls.ComboBox))
         {
-            model.ToggleSweep();
+            if (model.ToggleSweepCommand.CanExecute(null))
+            {
+                model.ToggleSweepCommand.Execute(null);
+            }
             e.Handled = true;
         }
     }

@@ -179,7 +179,7 @@ public sealed class SpectrumPlot : FrameworkElement
     private void DrawGrid(DrawingContext dc, Rect plot, double dip)
     {
         double top = _model.TopDb;
-        double bottom = SpectrumPlotModel.FixedBottomDb;
+        double bottom = _model.BottomDbValue;
         if (top > bottom)
         {
             double step = top - bottom > 100 ? 20 : 10;

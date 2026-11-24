@@ -348,6 +348,125 @@ public sealed class PolishShipTests : IDisposable
         Assert.False(model.IsSweeping);
     }
 
+    // ---- QA defects 1 and 2: the status line and the sweep label -------------
+
+    [Fact]
+    public void StatusLineCpuStaysSaneWhileSweeping()
+    {
+        // QA defect 2: the status bar read "CPU 153929%". The figure must be divided by the
+        // processor count and measured over a real window, so it stays in a sane range.
+        var source = new RfScout.Core.Fakes.SyntheticRadioSource(88_000_000, 108_000_000);
+        using var model = new RfScout.ViewModels.MainViewModel
+        {
+            RadioFactory = _ => source,
+        };
+
+        model.StartMHzText = "88";
+        model.StopMHzText = "108";
+        model.Start();
+        // The fake source emits exactly one frame per Start(), so TryRefreshDisplay only ever
+        // advances once; offer further frames so the status refresh runs on a real time window.
+        static SpectrumFrame Frame() => new()
+        {
+            StartHz = 88_000_000,
+            StopHz = 108_000_000,
+            BinWidthHz = 12_500,
+            PowerDb = [-50f, -45f, -40f],
+            FilledBins = 3,
+            SweepCompleted = true,
+            UtcTimestamp = DateTimeOffset.UtcNow,
+        };
+
+        void OfferFrames()
+        {
+            for (int i = 0; i < 20; i++)
+            {
+                model.Frames.Offer(Frame());
+                model.TryRefreshDisplay(0, out _, out _, out _);
+                Thread.Sleep(250);
+            }
+        }
+
+        try
+        {
+            OfferFrames();
+            DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+            string stats = string.Empty;
+            while (DateTime.UtcNow < deadline)
+            {
+                stats = model.StatsText;
+                if (stats.Contains("CPU", StringComparison.Ordinal))
+                {
+                    break;
+                }
+
+                Thread.Sleep(100);
+            }
+
+            Assert.Contains("CPU", stats, StringComparison.Ordinal);
+            int percentStart = stats.IndexOf("CPU ", StringComparison.Ordinal) + 4;
+            int percentEnd = stats.IndexOf('%', percentStart);
+            double percent = double.Parse(stats[percentStart..percentEnd], System.Globalization.CultureInfo.InvariantCulture);
+            Assert.True(percent >= 0 && percent <= 100 * Environment.ProcessorCount, $"status line: {stats}");
+        }
+        finally
+        {
+            model.Stop();
+        }
+    }
+
+    [Fact]
+    public void SweepLabelTracksTheLiveSweepInsteadOfStuckNoSweepYet()
+    {
+        // QA defect 1: the label above the plot (HoverText) stayed "No sweep yet" while a live
+        // sweep was filling the grid, because it only ever changed on pointer moves. The display
+        // refresh must update it from the newest frame.
+        var source = new RfScout.Core.Fakes.SyntheticRadioSource(88_000_000, 108_000_000);
+        using var model = new RfScout.ViewModels.MainViewModel
+        {
+            RadioFactory = _ => source,
+        };
+
+        model.StartMHzText = "88";
+        model.StopMHzText = "108";
+        model.Start();
+        try
+        {
+            Assert.Equal("No sweep yet", model.HoverText);
+            // Offer a partial (not-yet-complete) sweep frame: the refresh must turn the stuck
+            // label into a sweeping status without any pointer input.
+            model.Frames.Offer(new SpectrumFrame
+            {
+                StartHz = 88_000_000,
+                StopHz = 108_000_000,
+                BinWidthHz = 12_500,
+                PowerDb = [-50f, -45f, -40f],
+                FilledBins = 3,
+                SweepCompleted = false,
+                UtcTimestamp = DateTimeOffset.UtcNow,
+            });
+            DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+            bool changed = false;
+            while (DateTime.UtcNow < deadline)
+            {
+                if (model.TryRefreshDisplay(0, out _, out _, out _) && model.HoverText != "No sweep yet")
+                {
+                    changed = true;
+                    break;
+                }
+
+                Thread.Sleep(100);
+            }
+
+            Assert.True(changed, "the sweep label stayed \"No sweep yet\" while frames arrived");
+            Assert.False(model.HoverText.Contains("No sweep", StringComparison.Ordinal), model.HoverText);
+        }
+        finally
+        {
+            model.Stop();
+        }
+    }
+
     // ---- CPU tracker ---------------------------------------------------------
 
     [Fact]

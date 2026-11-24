@@ -156,6 +156,9 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     private string _zoomedSpectrumText = string.Empty;
     private string _envelopeText = string.Empty;
     private string _instFreqText = string.Empty;
+    private IReadOnlyList<double> _zoomedSpectrumPoints = [];
+    private IReadOnlyList<double> _envelopePoints = [];
+    private IReadOnlyList<double> _instFreqPoints = [];
     private SignalFeatures? _lastFeatures;
     private ClassificationResult? _lastClassification;
     private int _lastAnalyzedPeakId = -1;
@@ -909,6 +912,30 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         private set => SetField(ref _instFreqText, value);
     }
 
+    /// <summary>Most points a detail-pane trace plot is handed (the capture is decimated to this).</summary>
+    public const int TracePlotPoints = 400;
+
+    /// <summary>Zoomed-spectrum trace of the last analyze, decimated for the detail-pane plot.</summary>
+    public IReadOnlyList<double> ZoomedSpectrumPoints
+    {
+        get => _zoomedSpectrumPoints;
+        private set => SetField(ref _zoomedSpectrumPoints, value);
+    }
+
+    /// <summary>Envelope trace of the last analyze, decimated for the detail-pane plot.</summary>
+    public IReadOnlyList<double> EnvelopePoints
+    {
+        get => _envelopePoints;
+        private set => SetField(ref _envelopePoints, value);
+    }
+
+    /// <summary>Instantaneous-frequency trace of the last analyze, decimated for the detail-pane plot.</summary>
+    public IReadOnlyList<double> InstFreqPoints
+    {
+        get => _instFreqPoints;
+        private set => SetField(ref _instFreqPoints, value);
+    }
+
     /// <summary>The features of the last analyze, or null before one ran. Public for tests and the detail pane.</summary>
     public SignalFeatures? LastFeatures => _lastFeatures;
 
@@ -1347,6 +1374,14 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 
         UpdatePeakPipeline(latest);
 
+        // Auto-analyze runs after each completed sweep, once the peak table holds that sweep's peaks.
+        // This is the UI thread, outside the radio's callbacks, so the analyze stops the sweep and
+        // opens the radio itself (the manual Analyze path) and restarts the sweep when it is done.
+        if (latest.SweepCompleted && _autoAnalyze && IsSweeping)
+        {
+            _ = TickAutoAnalyze(borrowRunningSweep: false);
+        }
+
         lock (_gate)
         {
             if (_autoScale)
@@ -1360,7 +1395,20 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             _waterfallHelp = PlotReadout.SpanSummary(latest);
             RefreshStatsLocked();
 
+            // QA defect 1: the label above the plot showed "No sweep yet" while a live sweep was
+            // already filling the grid. The label is HoverText, which only ever came from pointer
+            // moves; refresh it from the newest frame so it tracks the sweep state on its own.
+            if (_hoverText is "No sweep yet" or "Sweeping" or "Sweep running"
+                || _hoverText.StartsWith("Sweeping ", StringComparison.Ordinal))
+            {
+                _hoverText = latest.SweepCompleted
+                    ? _spectrumHelp
+                    : "Sweeping " + Core.Display.FrequencyFormat.MHz(latest.StartHz)
+                        + " to " + Core.Display.FrequencyFormat.MHz(latest.StopHz);
+            }
+
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SpectrumHelp)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HoverText)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(WaterfallHelp)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DbMinText)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DbMaxText)));
@@ -1375,6 +1423,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     {
         if (_frames.TryGetSnapshot(out SpectrumFrame? frame, out _) && frame is not null)
         {
+            // AutoRange marks the range auto-scaled, which is what lets the plot's dB axis
+            // follow the display range instead of the fixed -160 floor (QA defect 3).
             _dbRange.AutoRange(frame.PowerDb, frame.FilledBins);
             lock (_gate)
             {
@@ -2159,6 +2209,9 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             ZoomedSpectrumText = zoom.Describe();
             EnvelopeText = envelope.Describe();
             InstFreqText = instFreq.Describe();
+            ZoomedSpectrumPoints = zoom.Decimate(TracePlotPoints).Points;
+            EnvelopePoints = envelope.Decimate(TracePlotPoints).Points;
+            InstFreqPoints = instFreq.Decimate(TracePlotPoints).Points;
             AnalyzeStatus = $"Peak {peak.Id}: {result.ClassText} {result.Confidence:P0}.";
         }
         finally
@@ -2184,8 +2237,11 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     /// Round-robin auto-analyze: called after each completed sweep while <see cref="AutoAnalyze"/>
     /// is on; analyzes the next visible peak in turn. Returns the running task, or null when there
     /// is nothing to do. Re-entrancy is guarded so a slow analyze never stacks.
+    /// <paramref name="borrowRunningSweep"/> is true when called from the radio's own sweep callback
+    /// (the analyze then captures on the running source); <see cref="TryRefreshDisplay"/> calls it
+    /// from the UI thread with false, so the analyze stops the sweep and opens the radio itself.
     /// </summary>
-    public Task? TickAutoAnalyze()
+    public Task? TickAutoAnalyze(bool borrowRunningSweep = true)
     {
         if (!AutoAnalyze || IsAnalyzing || _autoAnalyzeTickActive)
         {
@@ -2202,7 +2258,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         SelectedPeak = target;
         // The tick runs from the sweep's completion callback: mark the target so the analyze
         // borrows the running sweep's radio instead of trying to stop and re-open it.
-        _analyzeSourceMarker = target;
+        _analyzeSourceMarker = borrowRunningSweep ? target : null;
         _autoAnalyzeTickActive = true;
         return RunAutoAnalyzeAsync(target);
     }
@@ -2216,6 +2272,11 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             // together here, and a later tick must never have its target overwritten by an
             // earlier analyze still unwinding.
             await AnalyzePeakAsync(target).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or IOException or TimeoutException or OperationCanceledException)
+        {
+            // Nothing awaits an auto-analyze tick: report the failure instead of losing it.
+            AnalyzeStatus = $"Auto-analyze failed: {ex.Message}";
         }
         finally
         {
@@ -2592,10 +2653,19 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         // M6 status bar: sample rate, sweeps/s, dropped blocks and process CPU. The serial is
         // carried by DeviceText, which Start() and the unplug watcher set together with it.
         InitCpuTrackerLocked();
-        double cpu = _cpuTracker!.ReadPercent();
-        string rate = stats.SamplesPerSecond > 0
-            ? FrequencyFormat.BinWidth(stats.SamplesPerSecond) + "sps"
-            : "idle";
+        // QA defect 2: the status bar read "CPU 153929%". The root cause was a units slip in
+        // ProcessCpuTracker (ticks to ms multiplied by 1000 twice). The figure is also divided by
+        // the processor count so it reads 0..100 for the machine, and the tracker is created once
+        // so its window spans the refresh interval instead of being re-armed every call.
+        double cpu = _cpuTracker!.ReadPercent() / Environment.ProcessorCount;
+        // BinWidth formats a frequency ("20.00 MHz"), so appending "sps" read "20.00 MHzsps".
+        // Sample rates get their own unit.
+        string rate = stats.SamplesPerSecond switch
+        {
+            <= 0 => "idle",
+            >= 1e6 => (stats.SamplesPerSecond / 1e6).ToString("0.00", CultureInfo.InvariantCulture) + " Msps",
+            _ => (stats.SamplesPerSecond / 1e3).ToString("0.0", CultureInfo.InvariantCulture) + " ksps",
+        };
         _statsText = string.Format(
             CultureInfo.InvariantCulture,
             "{0} | sweeps/s {1} | dropped {2} | CPU {3:F0}%",
@@ -3090,20 +3160,23 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         Start();
     }
 
-    /// <summary>Percent of one core this process is using, from cumulative CPU time deltas.</summary>
+    /// <summary>Percent of total machine CPU this process is using (0..100), from cumulative
+    /// CPU-time deltas divided by wall time and processor count, matching the status bar.</summary>
     public double CpuPercent
     {
         get
         {
             lock (_gate)
             {
-                return _cpuTracker?.ReadPercent() ?? 0.0;
+                return _cpuTracker?.ReadPercent() / Environment.ProcessorCount ?? 0.0;
             }
         }
     }
 
     private void InitCpuTrackerLocked()
     {
+        // Created once per view model. Re-creating it per status refresh reset the baseline every
+        // time, so the percent was measured over a near-zero window and read absurdly high.
         _cpuTracker ??= new ProcessCpuTracker();
     }
 

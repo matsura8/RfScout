@@ -167,6 +167,12 @@ public sealed class DbRange
     public double SpanDb => MaxDb - MinDb;
 
     /// <summary>
+    /// True while the span comes from <see cref="AutoRange"/> rather than the toolbar dB boxes.
+    /// The plots use this to decide whether the dB axis follows the data or keeps its fixed floor.
+    /// </summary>
+    public bool AutoScaled { get; private set; }
+
+    /// <summary>
     /// Set both ends explicitly. A reversed pair is swapped rather than rejected, and a pair too
     /// close together is widened to a 1 dB span: the toolbar can hand over min &gt; max or two
     /// equal values while the operator is mid-typing, and a zero or negative span makes the plot
@@ -183,6 +189,7 @@ public sealed class DbRange
 
         MinDb = low;
         MaxDb = high;
+        AutoScaled = false;
     }
 
     /// <summary>
@@ -227,6 +234,7 @@ public sealed class DbRange
         double span = Math.Clamp(high - low, MinSpanDb, MaxSpanDb);
         double centre = (high + low) / 2;
         Set(centre - (span / 2), centre + (span / 2));
+        AutoScaled = true;
         return true;
     }
 
