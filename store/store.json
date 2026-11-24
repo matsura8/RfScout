@@ -1,8 +1,8 @@
 {
-  "identityName": "FROM-PARTNER-CENTER",
-  "publisher": "FROM-PARTNER-CENTER",
-  "publisherDisplayName": "FROM-PARTNER-CENTER",
-  "productId": "FROM-PARTNER-CENTER",
+  "identityName": "MaxPowerITLLC.RfScout",
+  "publisher": "CN=7E49AA53-079F-4923-BB2D-4046F55D0F71",
+  "publisherDisplayName": "Max Power IT LLC",
+  "productId": "9NL7XPZB5543",
   "displayName": "RfScout",
   "description": "Receive-only HackRF One spectrum scanner: live spectrum, waterfall, peak tracking and signal identification.",
   "logo": "src/RfScout/Assets/rfscout.ico",
