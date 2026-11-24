@@ -2607,15 +2607,19 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         // M6 status bar: sample rate, sweeps/s, dropped blocks and process CPU. The serial is
         // carried by DeviceText, which Start() and the unplug watcher set together with it.
         InitCpuTrackerLocked();
-        // QA defect 2: the status bar read "CPU 153929%". The tracker already divides CPU time by
-        // wall time, but it must also divide by the processor count, and it must not be re-armed
-        // every refresh (that made the window one paint long and amplified the cost of this call).
+        // QA defect 2: the status bar read "CPU 153929%". The root cause was a units slip in
+        // ProcessCpuTracker (ticks to ms multiplied by 1000 twice). The figure is also divided by
+        // the processor count so it reads 0..100 for the machine, and the tracker is created once
+        // so its window spans the refresh interval instead of being re-armed every call.
         double cpu = _cpuTracker!.ReadPercent() / Environment.ProcessorCount;
-        // BinWidth already appends " MHz"/" kHz", so the unit text is just "sps"; adding "s"
-        // here produced "20.00 MHzsps" on air (QA status-bar polish).
-        string rate = stats.SamplesPerSecond > 0
-            ? FrequencyFormat.BinWidth(stats.SamplesPerSecond) + "sps"
-            : "idle";
+        // BinWidth formats a frequency ("20.00 MHz"), so appending "sps" read "20.00 MHzsps".
+        // Sample rates get their own unit.
+        string rate = stats.SamplesPerSecond switch
+        {
+            <= 0 => "idle",
+            >= 1e6 => (stats.SamplesPerSecond / 1e6).ToString("0.00", CultureInfo.InvariantCulture) + " Msps",
+            _ => (stats.SamplesPerSecond / 1e3).ToString("0.0", CultureInfo.InvariantCulture) + " ksps",
+        };
         _statsText = string.Format(
             CultureInfo.InvariantCulture,
             "{0} | sweeps/s {1} | dropped {2} | CPU {3:F0}%",
@@ -3110,14 +3114,15 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         Start();
     }
 
-    /// <summary>Percent of one core this process is using, from cumulative CPU time deltas.</summary>
+    /// <summary>Percent of total machine CPU this process is using (0..100), from cumulative
+    /// CPU-time deltas divided by wall time and processor count, matching the status bar.</summary>
     public double CpuPercent
     {
         get
         {
             lock (_gate)
             {
-                return _cpuTracker?.ReadPercent() ?? 0.0;
+                return _cpuTracker?.ReadPercent() / Environment.ProcessorCount ?? 0.0;
             }
         }
     }

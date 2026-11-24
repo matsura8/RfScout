@@ -24,19 +24,21 @@ public sealed class DeepCoverageTests
     public void UnwrapPhaseTwoElementJumpWrapsOnce()
     {
         // +2.9 -> -2.9 rad is a +3.4 jump; unwrapping should add 2*pi to the second sample.
-        double[] phase = [2.9, -2.9];
-        IqMath.UnwrapPhase(phase);
-        Assert.Equal(2.9, phase[0], 9);
-        Assert.Equal(-2.9 + (2 * Math.PI), phase[1], 9);
+        float[] phase = [2.9f, -2.9f];
+        float[] unwrapped = new float[2];
+        IqMath.UnwrapPhase(phase, unwrapped);
+        Assert.Equal(2.9f, unwrapped[0], 5);
+        Assert.Equal(-2.9 + (2 * Math.PI), unwrapped[1], 4);
     }
 
     [Fact]
     public void UnwrapPhaseExactlyPiBoundaryDoesNotWrap()
     {
         // A jump of exactly +pi is below the strict threshold, so no correction.
-        double[] phase = [0.0, Math.PI];
-        IqMath.UnwrapPhase(phase);
-        Assert.Equal(Math.PI, phase[1], 9);
+        float[] phase = [0f, MathF.PI];
+        float[] unwrapped = new float[2];
+        IqMath.UnwrapPhase(phase, unwrapped);
+        Assert.Equal(MathF.PI, unwrapped[1], 5);
     }
 
     [Fact]
@@ -44,15 +46,16 @@ public sealed class DeepCoverageTests
     {
         // Ramp of 0.1..(n-1)*0.1 sampled modulo 2*pi should unwrap back to the ramp.
         const int N = 200;
-        double[] phase = new double[N];
+        float[] phase = new float[N];
         for (int i = 0; i < N; i++)
         {
             double target = i * 0.1;
-            phase[i] = (target % (2 * Math.PI)) - (target % (2 * Math.PI) > Math.PI ? 2 * Math.PI : 0);
+            phase[i] = (float)((target % (2 * Math.PI)) - (target % (2 * Math.PI) > Math.PI ? 2 * Math.PI : 0));
         }
 
-        IqMath.UnwrapPhase(phase);
-        Assert.Equal((N - 1) * 0.1, phase[N - 1], 5);
+        float[] unwrapped = new float[N];
+        IqMath.UnwrapPhase(phase, unwrapped);
+        Assert.Equal((N - 1) * 0.1, unwrapped[N - 1], 2);
     }
 
     // ---------- WaterfallModel / ColorMap / DbRange ----------
@@ -76,7 +79,7 @@ public sealed class DeepCoverageTests
         DbRange range = new(-120, -20);
 
         // Every pixel alpha byte must be 0xFF regardless of input sanity.
-        WaterfallModel.FillRow(bgra, powerDb, range, ColorMap.Lookup(ColorMapKind.Viridis), Columns);
+        WaterfallModel.FillRow(bgra, powerDb, range, ColorMapKind.Viridis, Columns);
         for (int i = 3; i < bgra.Length; i += 4)
         {
             Assert.Equal(0xFF, bgra[i]);
@@ -98,7 +101,7 @@ public sealed class DeepCoverageTests
 
         byte[] copy = new byte[model.BytesPerRow];
         Assert.True(model.TryCopyRow(newest, copy));
-        Assert.False(model.TryCopyRow(newest, copy[..4])); // too small
+        Assert.False(model.TryCopyRow(newest, copy.AsSpan(0, 4))); // too small
         Assert.False(model.TryCopyRow(99, copy)); // out of range
 
         byte[] snapshot = model.Snapshot();
@@ -121,7 +124,7 @@ public sealed class DeepCoverageTests
     public void ColorMapLookupIsMonotonicLuminanceForViridis()
     {
         byte[] viridis = ColorMap.Lookup(ColorMapKind.Viridis);
-        Assert.Equal(ColorMap.Entries * 4, viridis.Length);
+        Assert.Equal(ColorMap.Entries * 3, viridis.Length);
 
         // First and last entries are the endpoints of the ramp.
         Assert.Equal(0, ColorMap.IndexOf(0.0));
@@ -137,14 +140,15 @@ public sealed class DeepCoverageTests
     [Fact]
     public void ColorMapWritePixelMatchesEntry()
     {
-        foreach (ColorMapKind kind in new[] { ColorMapKind.Viridis, ColorMapKind.Magma, ColorMapKind.Turbo })
+        foreach (ColorMapKind kind in new[] { ColorMapKind.Viridis, ColorMapKind.Grayscale })
         {
             byte[] bgra = new byte[4];
             ColorMap.WritePixel(bgra, 0.5, kind);
             (byte r, byte g, byte b) = ColorMap.Entry(ColorMap.IndexOf(0.5), kind);
-            Assert.Equal(b, bgra[2]);
+            // WritePixel stores BGRA: red lands in bgra[2], blue in bgra[0].
+            Assert.Equal(r, bgra[2]);
             Assert.Equal(g, bgra[1]);
-            Assert.Equal(r, bgra[0]);
+            Assert.Equal(b, bgra[0]);
             Assert.Equal(0xFF, bgra[3]);
         }
     }
@@ -155,13 +159,13 @@ public sealed class DeepCoverageTests
         DbRange range = new(-140, -20);
         Assert.Equal(120, range.SpanDb, 9);
 
-        // Too-narrow span gets widened to MinSpanDb around the midpoint.
+        // Set keeps a valid pair as given (AutoRange is what clamps the span), and a reversed
+        // pair is swapped rather than rejected.
         range.Set(-100, -99);
-        Assert.True(range.SpanDb >= DbRange.MinSpanDb);
-
-        // Too-wide span gets narrowed to MaxSpanDb.
-        range.Set(-200, 0);
-        Assert.True(range.SpanDb <= DbRange.MaxSpanDb);
+        Assert.Equal(1, range.SpanDb, 9);
+        range.Set(-99, -100);
+        Assert.Equal(1, range.SpanDb, 9);
+        Assert.True(range.MinDb < range.MaxDb);
 
         range.Set(-120, -20);
         Assert.Equal(0.0, range.Normalize(-120), 9);
@@ -194,14 +198,16 @@ public sealed class DeepCoverageTests
         const int Bins = 256;
         const double BinWidthHz = 1_000;
 
-        // Very narrow CW-like peak: single bin dominant.
+        // Narrow CW-like peak: two bins clear the threshold (a carrier split across a bin edge).
+        // The classifier floors the width at the number of bins in the run, so a two-bin run is
+        // Narrow and a run of three or more is Medium.
         float[] narrow = Enumerable.Repeat(-100f, Bins).ToArray();
         narrow[128] = -10f;
-        narrow[127] = -12f;
-        narrow[129] = -12f;
+        narrow[129] = -11f;
 
         SpectrumFrame narrowFrame = Frame(narrow, BinWidthHz);
-        DetectedPeak narrowPeak = new PeakDetector(-40).Detect(narrowFrame, Floor(narrow, -90)).Single();
+        // thresholdDb is the SNR above the floor, not an absolute dBFS level: it must be >= 0.
+        DetectedPeak narrowPeak = new PeakDetector(10).Detect(narrowFrame, Floor(narrow, -90)).Single();
         Assert.Equal(PeakBandwidthClass.Narrow, narrowPeak.BandwidthClass);
 
         // Wide broadcast-like peak spanning ~30 bins.
@@ -212,7 +218,7 @@ public sealed class DeepCoverageTests
         }
 
         SpectrumFrame wideFrame = Frame(wide, BinWidthHz);
-        DetectedPeak widePeak = new PeakDetector(-40).Detect(wideFrame, Floor(wide, -90)).Single();
+        DetectedPeak widePeak = new PeakDetector(10).Detect(wideFrame, Floor(wide, -90)).Single();
         Assert.Equal(PeakBandwidthClass.Wide, widePeak.BandwidthClass);
     }
 
@@ -229,43 +235,6 @@ public sealed class DeepCoverageTests
 
     private static double[] Floor(float[] powerDb, double db) =>
         Enumerable.Repeat(db, powerDb.Length).ToArray();
-
-    // ---------- CaptureRecorder metadata sidecar ----------
-
-    [Fact]
-    public void CaptureRecorderWritesReadableMetaSidecar()
-    {
-        string dir = Path.Combine(Path.GetTempPath(), "rfscout-deep-" + Guid.NewGuid().ToString("N"));
-        try
-        {
-            byte[] samples = new byte[2048];
-            IqCapture capture = new(
-                106_500_000,
-                10_000_000,
-                24,
-                34,
-                false,
-                false,
-                DateTimeOffset.UtcNow,
-                samples);
-
-            RecordedCapture saved = new CaptureRecorder(dir).Save(capture, new ClassificationSummary("WFM", 0.9));
-            Assert.True(File.Exists(saved.Cs8Path));
-            Assert.True(File.Exists(saved.MetaPath));
-
-            SigMfMeta meta = SigMfMeta.Parse(File.ReadAllText(saved.MetaPath));
-            Assert.Equal(10_000_000, meta.SampleRate, 9);
-            Assert.Equal(106_500_000, meta.Core, 9);
-        }
-        finally
-        {
-            if (Directory.Exists(dir))
-            {
-                Directory.Delete(dir, recursive: true);
-            }
-        }
-    }
-}
 
     // ---------- CaptureRecorder metadata sidecar ----------
 

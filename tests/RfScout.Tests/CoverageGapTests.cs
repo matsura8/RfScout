@@ -255,9 +255,12 @@ public class CoverageGapTests
             Assert.Equal(lookup[2], row[column * 4]);
         }
 
-        int index = Math.Clamp((int)MathF.Round(0.75f * 255.0f), 0, 255) * 3;
-        Assert.Equal(lookup[index], row[12]);
+        // NaN and both infinities count as empty bins, so columns 0..2 paint the bottom of the
+        // ramp. +0.75 dB sits above the -100..0 range and clamps to the top entry.
+        int index = ColorMap.IndexOf(1.0) * 3;
+        // Pixels are BGRA: red lands in byte 2 of the pixel, blue in byte 0.
+        Assert.Equal(lookup[index], row[14]);
         Assert.Equal(lookup[index + 1], row[13]);
-        Assert.Equal(lookup[index + 2], row[14]);
+        Assert.Equal(lookup[index + 2], row[12]);
     }
 }

@@ -24,7 +24,9 @@ public sealed class ProcessCpuTracker
         _lastWallTicks = Stopwatch.GetTimestamp();
     }
 
-    /// <summary>CPU percent since the last call (0 on the first call).</summary>
+    /// <summary>CPU percent of one core since the last call (0 on the first call): a busy
+    /// thread on its own core reads 100, and the sum over all cores can exceed 100. Callers
+    /// that want a 0..100 machine figure divide by <see cref="Environment.ProcessorCount"/>.</summary>
     public double ReadPercent()
     {
         lock (_gate)
@@ -33,7 +35,9 @@ public sealed class ProcessCpuTracker
             TimeSpan cpuNow = ReadCpuTime();
 
             long wallDelta = wallNow - _lastWallTicks;
-            double cpuDeltaMs = (cpuNow.Ticks - _lastCpuTicks) * 1000.0 / TimeSpan.TicksPerMillisecond;
+            // Ticks to milliseconds is a single division. The old "* 1000.0" here made every
+            // reading 1000x too high, which is where the status bar's "CPU 153929%" came from.
+            double cpuDeltaMs = (cpuNow.Ticks - _lastCpuTicks) / (double)TimeSpan.TicksPerMillisecond;
             double wallDeltaMs = wallDelta * 1000.0 / Stopwatch.Frequency;
 
             _lastWallTicks = wallNow;

@@ -225,7 +225,9 @@ public sealed class WaterfallModel
             for (int i = first; i < last; i++)
             {
                 float value = powerDb[i];
-                if (value != SpectrumFrame.EmptyBin && value > best)
+                // Non-finite bins (NaN, or +/-Infinity from a log of zero or an overflow) carry
+                // no level, so they count as empty rather than painting the top of the ramp.
+                if (value != SpectrumFrame.EmptyBin && float.IsFinite(value) && value > best)
                 {
                     best = value;
                 }
