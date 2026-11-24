@@ -1,0 +1,38 @@
+{
+  "name": "RfScout",
+  "slug": "rfscout",
+  "platform": "Windows application",
+  "tagline": "A receive-only HackRF One spectrum scanner for Windows.",
+  "titleSuffix": "RfScout",
+  "kicker": "Receive-only RF scanning",
+  "headline": "Turn a HackRF One into a wideband spectrum scanner.",
+  "intro": "RfScout sweeps 1 MHz to 6 GHz on a HackRF One, shows a live spectrum and a scrolling waterfall, finds the signals worth looking at and tracks them sweep to sweep, and works out what kind of device is behind each one. It is built for operators who want to survey a band, chase a signal, and know what they found, without a second tool. RfScout is receive only: it never transmits.",
+  "features": [
+    "Wideband sweep from 1 MHz to 6 GHz in the HackRF's hardware sweep mode, with presets for FM broadcast, airband, marine VHF/AIS, NOAA weather, amateur HF, VHF, the 433, 868 and 915 MHz ISM bands, 1090 MHz ADS-B and 2.4 GHz Wi-Fi",
+    "Live spectrum with peak hold and an estimated noise floor, plus a colour-mapped scrolling waterfall with automatic or manual dB range",
+    "Automatic peak detection and tracking: stable IDs, SNR, occupied bandwidth, duty cycle, continuous or bursty labels, and a band plan that names the band each peak sits in",
+    "Narrowband analysis of any peak with an explainable rule-based modulation classifier (AM, NFM, WFM, OOK, FSK and more), each label shown with the measurements behind it",
+    "I/Q captures saved as .cs8 with SigMF metadata, ready for later playback and analysis",
+    "Device identification from public broadcast identifiers: ISM sensors and remotes through rtl_433, aircraft ADS-B, FM station names through RDS, and ship AIS",
+    "Locate mode: a large live signal-strength meter, a rolling 60-second graph, peak hold, and an optional audio tone whose pitch follows strength",
+    "Per-user settings, CSV and JSON export of the peak table, and automatic reconnect when the HackRF is unplugged and plugged back in"
+  ],
+  "screenshots": [
+    {
+      "file": "store/screenshots/01-sweep-fm.png",
+      "alt": "RfScout main window sweeping the FM broadcast band: spectrum plot on top, waterfall below, peak table underneath, and the analysis pane on the right",
+      "caption": "The FM broadcast band preset: the spectrum and waterfall update live while the peak table tracks every signal above the threshold."
+    }
+  ],
+  "tiles": [
+    { "metric": "1-6 GHz", "title": "Wideband sweep", "text": "The HackRF's own hardware sweep mode covers the whole range, with band presets and adjustable LNA and VGA gain." },
+    { "metric": "Explainable", "title": "Know what you found", "text": "Peaks are classified by rules, not guesswork: every label comes with the measurements that decided it." },
+    { "metric": "Receive only", "title": "It never transmits", "text": "No transmit path is exposed at all; antenna power and the RF amplifier start off and ask before turning on." }
+  ],
+  "requirements": [
+    "64-bit Windows 10 or 11",
+    "HackRF One with firmware that provides USB API 1.02 or later (developed against firmware v2.3.1)",
+    "WinUSB driver for the HackRF, installed once with the HackRF Windows drivers or with Zadig",
+    "The Microsoft Store build needs the same WinUSB driver: the Store cannot install drivers for you"
+  ]
+}
