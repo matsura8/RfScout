@@ -4,12 +4,27 @@
 spectrum and waterfall, finds and tracks the signals worth looking at, and works out what kind of
 device is behind each one.
 
-> **Status: feature complete.** Milestones 1–6 are all merged: the wideband sweep with live
+> **Status: released.** Version 0.1.0 is live in the
+> [Microsoft Store](https://apps.microsoft.com/detail/9NL7XPZB5543). Milestones 1–6 are all merged: the wideband sweep with live
 > spectrum and waterfall, peak detection and tracking with a peak table, narrowband analysis with
 > a modulation classifier and SigMF recording, device identification (ADS-B, AIS, RDS, rtl_433
 > sensors), Locate mode, and per-user settings with CSV/JSON export and unplug/replug recovery.
 > A few checks are still manual or synthetic-only, and some test cases are skipped — see
 > [Known limitations](#known-limitations) before judging what has been proven on real hardware.
+
+## Download
+
+<a href="https://apps.microsoft.com/detail/9NL7XPZB5543?mode=direct"><img src="https://get.microsoft.com/images/en-us%20dark.svg" alt="Get it from Microsoft" width="200"/></a>
+
+The compiled app is free in the Microsoft Store:
+**[RfScout on the Microsoft Store](https://apps.microsoft.com/detail/9NL7XPZB5543)** (Store ID `9NL7XPZB5543`).
+On Windows you can also open the listing straight in the Store app with
+`ms-windows-store://pdp/?productid=9NL7XPZB5543`, or install from a terminal with
+`winget install --source msstore 9NL7XPZB5543`.
+
+The Store build updates itself and includes rtl_433. You still need to install the HackRF's
+**WinUSB driver** once yourself (see [Requirements](#requirements)), because Store apps cannot
+install drivers. To build from source instead, see [Build and run](#build-and-run).
 
 ## What it does
 
@@ -81,8 +96,20 @@ dotnet build -c Release
 Output goes to `out\artifacts` (see `Directory.Build.props`). For a debug build, use
 `dotnet build` and run `out\artifacts\bin\RfScout\debug\RfScout.exe`.
 
+The build is x64 only and copies the native DLLs from `native\x64`, `bandplan.json` and the
+Locate tone next to `RfScout.exe`. rtl_433 is not copied: when you run from the build output,
+RfScout finds `tools\rtl_433\rtl_433.exe` by walking up to the repository root, so keep the
+`tools` folder in the clone. Without it, ISM-band decoding falls back to the built-in OOK decoder.
+
 `RfScout.exe --self-test` runs the built-in checks (FFT, sweep framing, sweep maths) without a
 radio, and exits with 0 when they pass.
+
+### Store package (MSIX)
+
+You don't need to package anything yourself: the published build is in the
+[Microsoft Store](#download). For reference, the Store MSIX is made from the Release build, and
+its identity and bundled extras (rtl_433) are defined in [`store/store.json`](store/store.json).
+Each published version is tagged `store-v<version>` (the current one is `store-v0.1.0.0`).
 
 ### Using it
 
@@ -197,10 +224,12 @@ the full checklist. Report security problems privately, as described in [SECURIT
 
 ## Microsoft Store
 
-RfScout is packaged for the Microsoft Store as a full-trust MSIX. The package identity, listing text
-and screenshots are in [`store/`](store), and the privacy policy is [PRIVACY.md](PRIVACY.md). The
-Store version needs the same WinUSB driver as the plain build (see [Requirements](#requirements)),
-because the Store cannot install drivers.
+RfScout is [available in the Microsoft Store](https://apps.microsoft.com/detail/9NL7XPZB5543)
+(Store ID `9NL7XPZB5543`, deep link `ms-windows-store://pdp/?productid=9NL7XPZB5543`). It is
+packaged as a full-trust MSIX. The package identity, listing text and screenshots are in
+[`store/`](store), and the privacy policy is [PRIVACY.md](PRIVACY.md). The Store version needs the
+same WinUSB driver as the plain build (see [Requirements](#requirements)), because the Store cannot
+install drivers.
 
 ## License
 
