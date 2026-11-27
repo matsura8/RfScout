@@ -105,6 +105,9 @@ public static class CapturePlots
                 acc = new float[SpectrumFftLength];
             }
 
+            // PowerShifted accumulates into its output, so clear it per window; the fold
+            // into acc below is what averages the windows.
+            Array.Clear(power);
             fft.PowerShifted(wr, wi, power);
             for (int i = 0; i < SpectrumFftLength; i++)
             {
