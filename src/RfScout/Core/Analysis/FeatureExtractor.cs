@@ -1,4 +1,5 @@
 using RfScout.Core.Dsp;
+using RfScout.Core.Gpu;
 
 namespace RfScout.Core.Analysis;
 
@@ -68,9 +69,26 @@ public static class FeatureExtractor
 
     /// <summary>
     /// Extract every M3 feature from <paramref name="iq"/> (interleaved signed 8-bit, as
-    /// captured) sampled at <paramref name="sampleRateHz"/>.
+    /// captured) sampled at <paramref name="sampleRateHz"/>, entirely on the CPU.
     /// </summary>
-    public static SignalFeatures Extract(ReadOnlyMemory<byte> iq, double sampleRateHz)
+    public static SignalFeatures Extract(ReadOnlyMemory<byte> iq, double sampleRateHz) =>
+        Extract(iq, sampleRateHz, null);
+
+    /// <summary>
+    /// Extract every M3 feature from <paramref name="iq"/>, taking the sample-by-sample
+    /// measurements from <paramref name="accelerator"/> when it can supply them (CUDA).
+    ///
+    /// The split is deliberate. The accelerator does the per-sample work that is embarrassingly
+    /// parallel - the s8 conversion, DC removal, envelope, phase discriminator and the Hann
+    /// periodogram - and the statistics, the classifier rules and the decoders stay here, so a
+    /// label never depends on which device produced the numbers. Feeding the accelerator's
+    /// arrays through the same statistics is what the GPU-vs-CPU parity test pins: the same
+    /// measurements in, the same features out to float rounding.
+    /// </summary>
+    public static SignalFeatures Extract(
+        ReadOnlyMemory<byte> iq,
+        double sampleRateHz,
+        ICaptureAccelerator? accelerator)
     {
         if (sampleRateHz <= 0)
         {
@@ -83,39 +101,23 @@ public static class FeatureExtractor
             throw new ArgumentException("Need at least 64 IQ samples to extract features.", nameof(iq));
         }
 
-        float[] re = new float[samples];
-        float[] im = new float[samples];
-        IqMath.ToComplex(iq.Span, re, im);
-
-        // DC removal: subtract the block mean so the tuned centre's spike does not dominate the
-        // envelope and phase statistics. A residual offset after this is reported as DcOffsetHz.
-        float meanRe = (float)IqMath.Mean(re.AsSpan());
-        float meanIm = (float)IqMath.Mean(im.AsSpan());
-        for (int i = 0; i < samples; i++)
-        {
-            re[i] -= meanRe;
-            im[i] -= meanIm;
-        }
-
-        // *2 so a full-scale complex sine reads 0 dBFS (its I^2+Q^2 mean is 0.5).
-        double rmsDbfs = IqMath.PowerToDb(IqMath.MeanPower(re, im) * 2.0);
-        double peakDbfs = IqMath.PowerToDb(PeakPower(re, im) * 2.0);
+        CaptureMeasurements m = CaptureMeasurements.Compute(iq, sampleRateHz, accelerator);
+        float[] re = m.Re;
+        float[] im = m.Im;
+        double[] freqRaw = m.Frequency;
+        // The discriminator comes from the measurement arrays: the phase unwrap and the
+        // difference are already folded into it (see CaptureMeasurements).
+        double rmsDbfs = IqMath.PowerToDb(m.MeanPower * 2.0);
+        double peakDbfs = IqMath.PowerToDb(m.PeakPower * 2.0);
 
         // Envelope statistics (AM depth, OOK on/off ratio, burst timing).
-        float[] env = new float[samples];
-        IqMath.Envelope(re, im, env);
+        float[] env = m.Envelope;
         (double amDepth, double ookRatio, int burstCount, double burstDuty) = EnvelopeStatistics(env, sampleRateHz);
 
         // Instantaneous frequency (FSK tones, FM deviation, tone spacing, symbol rate). The
         // discriminator is smoothed over a short window first: per-sample phase noise makes a
         // steady tone's frequency swing as wide as a real deviation, and its zero crossings
         // ripple at the noise rate rather than at a keying rate.
-        float[] phase = new float[samples];
-        IqMath.Phase(re, im, phase);
-        float[] unwrapped = new float[samples];
-        IqMath.UnwrapPhase(phase, unwrapped);
-        double[] freqRaw = new double[samples];
-        IqMath.InstantaneousFrequencyHz(unwrapped, sampleRateHz, freqRaw);
         // Window: a tenth of the shortest credible keying period (about 10 kBd), floored at
         // eight samples for noise averaging. Long enough to average per-sample phase noise
         // (which alone swings an unsmoothed discriminator like a real deviation); short enough
@@ -167,8 +169,9 @@ public static class FeatureExtractor
             FrequencyStatistics(freqSmooth, sampleRateHz);
         double dcOffsetHz = MeanTrimmed(freqSmooth, sampleRateHz);
 
-        // Averaged periodogram: occupied bandwidth and spectral flatness.
-        (double occupiedHz, double flatnessDb) = SpectralStatistics(re, im, samples, sampleRateHz);
+        // Welch periodogram: occupied bandwidth and spectral flatness. The accelerators
+        // produce the averaged power spectrum directly; the CPU builds it here.
+        (double occupiedHz, double flatnessDb) = SpectralStatistics(m.Power, m.PowerWindows, sampleRateHz);
 
         // Symbol rate from the discriminator's keying transitions. The keying estimate needs a
         // finer view than the tone histogram: the smoothing window rounds hard keying edges and
@@ -213,21 +216,6 @@ public static class FeatureExtractor
             burstDuty,
             symbolRate,
             toneSpacing);
-    }
-
-    private static double PeakPower(float[] re, float[] im)
-    {
-        double peak = 0;
-        for (int i = 0; i < re.Length; i++)
-        {
-            double p = (re[i] * re[i]) + (im[i] * im[i]);
-            if (p > peak)
-            {
-                peak = p;
-            }
-        }
-
-        return peak;
     }
 
     /// <summary>
@@ -442,34 +430,10 @@ public static class FeatureExtractor
     /// the power) and spectral flatness (geometric over arithmetic mean of the power bins, in
     /// dB; near 0 dB is noise-like, very negative is tonal).
     /// </summary>
-    private static (double OccupiedHz, double FlatnessDb) SpectralStatistics(float[] re, float[] im, int samples, double sampleRateHz)
+    private static (double OccupiedHz, double FlatnessDb) SpectralStatistics(float[] power, int windows, double sampleRateHz)
     {
         const int N = AnalysisFftLength;
-        if (samples < N)
-        {
-            return (0, double.NegativeInfinity);
-        }
-
-        float[] window = WindowFunctions.Hann(N);
-        float[] power = new float[N];
-        var fft = new FloatFft(N);
-        int windows = 0;
-        float[] wr = new float[N];
-        float[] wi = new float[N];
-        for (int start = 0; start + N <= samples; start += N / 2)
-        {
-            for (int i = 0; i < N; i++)
-            {
-                wr[i] = re[start + i] * window[i];
-                wi[i] = im[start + i] * window[i];
-            }
-
-            Array.Clear(power, 0, N);
-            fft.PowerShifted(wr, wi, power);
-            windows++;
-        }
-
-        if (windows == 0)
+        if (windows == 0 || power.Length < N)
         {
             return (0, double.NegativeInfinity);
         }
