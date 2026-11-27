@@ -1,4 +1,4 @@
-﻿using System.Globalization;
+using System.Globalization;
 using System.IO;
 using RfScout.Core.Analysis;
 using RfScout.Core.Gpu;
@@ -87,9 +87,9 @@ public static class GpuSelfTest
         if (cpuFeatures.FskToneCount != gpuFeatures.FskToneCount
             || cpuFeatures.BurstCount != gpuFeatures.BurstCount)
 
-        output.WriteLine(ok
-            ? "  result   : PASS - the GPU measured the same capture as the CPU"
-            : "  result   : FAIL - the GPU measurements drifted outside tolerance (see above)");
+            output.WriteLine(ok
+                ? "  result   : PASS - the GPU measured the same capture as the CPU"
+                : "  result   : FAIL - the GPU measurements drifted outside tolerance (see above)");
         return ok ? 0 : 1;
     }
 
